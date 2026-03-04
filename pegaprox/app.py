@@ -19,6 +19,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_sock import Sock
 from flask_compress import Compress
+from pathlib import Path
 
 from pegaprox.constants import (
     PEGAPROX_VERSION, PEGAPROX_BUILD,
@@ -593,8 +594,18 @@ def main(debug_mode=False):
         ssl_context = (SSL_CERT_FILE, SSL_KEY_FILE)
         print("Custom SSL certificates found - starting with HTTPS")
     else:
-        cert_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cert.pem')
-        key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'key.pem')
+
+        # We validate this path for the Debian package
+        if Path("/usr/lib/pegaprox").exists():
+            DATA_DIR = Path("/var/lib/pegaprox")
+        else:
+            DATA_DIR = Path(__file__).resolve().parent.parent
+
+        SSL_DIR = DATA_DIR / "ssl"
+
+        cert_file = SSL_DIR / "cert.pem"
+        key_file = SSL_DIR / "key.pem"
+
         if os.path.exists(cert_file) and os.path.exists(key_file):
             ssl_context = (cert_file, key_file)
             print("SSL certificates found - starting with HTTPS")
