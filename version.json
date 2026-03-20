@@ -1,7 +1,7 @@
 {
-    "version": "0.9.2",
-    "build": "2026.03.16",
-    "release_date": "2026-03-16",
+    "version": "0.9.2.1",
+    "build": "2026.03.20",
+    "release_date": "2026-03-20",
     "min_python": "3.8",
     "download_url": "https://github.com/PegaProx/project-pegaprox/releases/latest",
     "update_archive": "https://github.com/PegaProx/project-pegaprox/archive/refs/heads/main.tar.gz",
@@ -173,6 +173,28 @@
         "Fix hardening detection for postfix_banner, default_umask, audit_boot, mem_protection",
         "Change auto-migrate default to disabled for new clusters (#136)",
         "XCP-ng feature parity: RRD metrics, guest IPs, pool HA, PIFs"
+    ],
+    "changelog_0921": [
+        "fix: cross-cluster replication clone API parameter target→storage (#192)",
+        "fix: Docker SSH — add openssh-client + sshpass for CVE scanner & hardening (#175)",
+        "fix: ESXi migration uses wrong node IP on multi-homed nodes (#132)",
+        "fix: PBS backup snapshots not loading on large datastores (#143)",
+        "fix: VM backups tab infinite loading spinner (#143)",
+        "fix: placeholder text contrast for OIDC/LDAP settings (#170)",
+        "fix: missing files in update_files causing upgrade crash (#172)",
+        "fix: rolling update log phase name apt_upgrade→apt_dist_upgrade (#178)",
+        "fix: support zip missing cluster logs + IP redaction (#182)",
+        "fix: rolling update status not refreshed after completion (#183)",
+        "fix: migration false failure on WARNINGS exit status (#184)",
+        "fix: Top Resources click navigates to host instead of VM (#190)",
+        "fix: CDN SRI hash mismatch — pinned React/Babel/Chart.js versions (#206)",
+        "fix: auto-failover toggle CSS rendering in site recovery",
+        "fix: login background file size validation (PR #195)",
+        "fix: sponsor image 404 console errors (PR #203)",
+        "fix: site recovery audit logging gaps (8 missing operations)",
+        "feat: French translations by @IMNotMax (PR #186)",
+        "feat: @IMNotMax added to About credits",
+        "feat: topology view snapshot freeze (prevents SSE re-layout)"
     ],
     "breaking_changes": []
 }
