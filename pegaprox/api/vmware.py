@@ -813,7 +813,13 @@ def start_vmware_migration(vmware_id, vm_id):
     mgr = vmware_managers[vmware_id]
     vm_detail = mgr.get_vm(vm_id)
     vm_name = vm_detail.get('data', {}).get('name', vm_id) if 'data' in vm_detail else vm_id
-    
+
+    # NS: pass all NICs from VMware to migration task so multi-NIC + MAC works
+    if 'selected_nics' not in data and 'data' in vm_detail:
+        nics = vm_detail['data'].get('nics', [])
+        if nics:
+            data['selected_nics'] = nics
+
     mid = str(uuid.uuid4())[:8]
     task = V2PMigrationTask(mid, vmware_id, vm_id, data['target_cluster'],
                             data['target_node'], data['target_storage'], vm_name, data)

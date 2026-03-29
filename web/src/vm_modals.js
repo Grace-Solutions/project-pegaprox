@@ -140,12 +140,15 @@
             const [cloneConfig, setCloneConfig] = useState({
                 name: `${vm.name || vm.vmid}-clone`,
                 newid: '',
-                full: true,  // default to full clone
+                full: true,
                 target_node: vm.node,
                 description: '',
+                // #194: Cloud-Init fields
+                ciuser: '', cipassword: '', sshkeys: '', ipconfig0: '', nameserver: '', searchdomain: ''
             });
             const [loading, setLoading] = useState(false);
             const [loadingVmid, setLoadingVmid] = useState(true);
+            const [showCloudInit, setShowCloudInit] = useState(false);
 
             const isQemu = vm.type === 'qemu';
 
@@ -270,6 +273,56 @@
                                     </button>
                                 </div>
                             </div>
+
+                            {/* #194: Cloud-Init config (QEMU only) */}
+                            {isQemu && (
+                                <div>
+                                    <button onClick={() => setShowCloudInit(!showCloudInit)}
+                                        className="flex items-center gap-2 text-xs text-gray-400 hover:text-white transition-colors mb-2">
+                                        <span className={`transform transition-transform ${showCloudInit ? 'rotate-90' : ''}`}>▶</span>
+                                        Cloud-Init ({t('optional')})
+                                    </button>
+                                    {showCloudInit && (
+                                        <div className="space-y-3 p-3 bg-proxmox-dark rounded-lg border border-proxmox-border">
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">{t('user') || 'User'}</label>
+                                                    <input type="text" value={cloneConfig.ciuser} onChange={e => setCloneConfig({...cloneConfig, ciuser: e.target.value})}
+                                                        placeholder="root" className="w-full px-3 py-1.5 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">{t('passwordLabel') || 'Password'}</label>
+                                                    <input type="password" value={cloneConfig.cipassword} onChange={e => setCloneConfig({...cloneConfig, cipassword: e.target.value})}
+                                                        placeholder="••••••" className="w-full px-3 py-1.5 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">IP Config</label>
+                                                <input type="text" value={cloneConfig.ipconfig0} onChange={e => setCloneConfig({...cloneConfig, ipconfig0: e.target.value})}
+                                                    placeholder="ip=dhcp  or  ip=192.168.1.100/24,gw=192.168.1.1" className="w-full px-3 py-1.5 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm font-mono" />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">DNS Server</label>
+                                                    <input type="text" value={cloneConfig.nameserver} onChange={e => setCloneConfig({...cloneConfig, nameserver: e.target.value})}
+                                                        placeholder="8.8.8.8" className="w-full px-3 py-1.5 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">Search Domain</label>
+                                                    <input type="text" value={cloneConfig.searchdomain} onChange={e => setCloneConfig({...cloneConfig, searchdomain: e.target.value})}
+                                                        placeholder="example.com" className="w-full px-3 py-1.5 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm" />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">SSH Public Keys</label>
+                                                <textarea value={cloneConfig.sshkeys} onChange={e => setCloneConfig({...cloneConfig, sshkeys: e.target.value})}
+                                                    placeholder="ssh-ed25519 AAAA... user@host" rows="2"
+                                                    className="w-full px-3 py-1.5 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm font-mono resize-none" />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             <div>
                                 <label className="block text-xs text-gray-400 mb-1">{t('description')} ({t('optional')})</label>

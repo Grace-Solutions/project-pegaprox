@@ -99,23 +99,26 @@ def _migrate_vm_cross_cluster(src_mgr, tgt_mgr, vmid, vm_type, storage_map, net_
         if not vm_node:
             return False, f"VM {vmid} not found on source cluster"
 
-        # determine target storage
+        # determine target storage — build PVE mapping format "source:target"
         # MK: check if VM's current storage has a mapping, else use first available
         target_storage = ''
         if storage_map:
-            # try to map from VM's disk storage
             try:
                 config = src_mgr.get_vm_config(vm_node, vmid, vm_type)
+                # build PVE mapping format: "src_stor:tgt_stor,src_stor2:tgt_stor2"
+                mappings = []
                 for k, v in (config or {}).items():
-                    if k.startswith(('scsi', 'virtio', 'ide', 'sata')) and isinstance(v, str) and ':' in v:
+                    if k.startswith(('scsi', 'virtio', 'ide', 'sata', 'rootfs', 'mp')) and isinstance(v, str) and ':' in v:
                         src_stor = v.split(':')[0]
-                        if src_stor in storage_map:
-                            target_storage = storage_map[src_stor]
-                            break
+                        if src_stor and src_stor != 'none' and src_stor in storage_map:
+                            mappings.append(f"{src_stor}:{storage_map[src_stor]}")
+                if mappings:
+                    target_storage = ','.join(dict.fromkeys(mappings))  # dedupe
             except Exception:
                 pass
         if not target_storage:
-            target_storage = list(storage_map.values())[0] if storage_map else 'local-lvm'
+            fallback = list(storage_map.values())[0] if storage_map else 'local-lvm'
+            target_storage = fallback
 
         target_bridge = 'vmbr0'
         if net_map:
@@ -152,7 +155,7 @@ def _migrate_vm_cross_cluster(src_mgr, tgt_mgr, vmid, vm_type, storage_map, net_
 
         # cleanup token after a delay (migration is async)
         def _delayed_cleanup():
-            time.sleep(1800)  # 30 min grace - migrations can take a while
+            time.sleep(3600)  # 1h grace - large disks (1TB+) need time
             try:
                 tgt_mgr.delete_api_token('pegaprox-sr')
             except Exception:
@@ -351,14 +354,20 @@ def execute_test_failover(plan_id):
         except Exception as e:
             results[str(vmid)] = {'success': False, 'error': str(e)}
 
-    _complete_event(event_id, 'completed', {'results': results, 'test_vmids': test_vmids})
+    all_failed = all(not r.get('success') for r in results.values()) if results else True
+    event_status = 'failed' if all_failed else 'completed'
+    _complete_event(event_id, event_status, {'results': results, 'test_vmids': test_vmids})
 
     db = get_db()
     now = datetime.utcnow().isoformat()
-    db.execute("UPDATE site_recovery_plans SET last_test = ?, updated_at = ? WHERE id = ?", (now, now, plan_id))
-
-    # keep status as 'testing' until cleanup
-    _broadcast_progress(plan_id, "Test failover complete. Cleanup when ready.", 100)
+    if all_failed:
+        # no clones created, nothing to cleanup — mark as failed
+        db.execute("UPDATE site_recovery_plans SET status = 'failed', last_test = ?, updated_at = ? WHERE id = ?", (now, now, plan_id))
+        _broadcast_progress(plan_id, "Test failover failed — no VMs cloned.", 100)
+    else:
+        db.execute("UPDATE site_recovery_plans SET last_test = ?, updated_at = ? WHERE id = ?", (now, now, plan_id))
+        # keep status as 'testing' until cleanup
+        _broadcast_progress(plan_id, "Test failover complete. Cleanup when ready.", 100)
 
     ok = sum(1 for r in results.values() if r.get('success'))
     log_audit('system', 'site_recovery.test_complete',
@@ -475,7 +484,9 @@ def _heartbeat_check():
                     continue
                 db.execute("UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ?",
                            (datetime.utcnow().isoformat(), plan_id))
-                gevent.spawn(execute_failover, plan_id, 'emergency')
+                # NS: use crash-safe wrapper so a greenlet crash sets status to 'failed'
+                from pegaprox.api.site_recovery import _safe_spawn_failover
+                _safe_spawn_failover(execute_failover, plan_id, 'emergency')
                 log_audit('system', 'site_recovery.auto_failover',
                           f"Auto-failover triggered for '{plan['name']}' - source unreachable for {int(elapsed)}s")
             except Exception as e:

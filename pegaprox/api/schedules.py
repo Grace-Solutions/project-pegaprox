@@ -754,7 +754,7 @@ def get_update_schedule(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/updates/schedule', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['backup.schedule'])
 def set_update_schedule(cluster_id):
     """Set the scheduled update configuration for a cluster"""
     ok, err = check_cluster_access(cluster_id)
@@ -794,7 +794,7 @@ def set_update_schedule(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/updates/schedule', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['backup.schedule'])
 def delete_update_schedule(cluster_id):
     """Delete/disable the scheduled update for a cluster"""
     ok, err = check_cluster_access(cluster_id)

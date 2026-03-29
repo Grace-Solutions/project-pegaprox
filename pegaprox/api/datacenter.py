@@ -234,7 +234,7 @@ def get_cluster_multipath_status(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/multipath/setup', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def setup_multipath(cluster_id):
     """Easy Setup: Install and configure multipath on all nodes
 
@@ -544,7 +544,7 @@ devices {
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/multipath/reconfigure', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def reconfigure_multipath(cluster_id, node):
     """Reconfigure multipath on a specific node (rescan devices)"""
     ok, err = check_cluster_access(cluster_id)
@@ -590,7 +590,7 @@ def reconfigure_multipath(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/iscsi/discover', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def discover_iscsi_targets(cluster_id, node):
     """Discover iSCSI targets on a portal - for Easy Setup"""
     ok, err = check_cluster_access(cluster_id)
@@ -631,7 +631,7 @@ def discover_iscsi_targets(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/iscsi/login', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def login_iscsi_target(cluster_id, node):
     """Login to an iSCSI target - creates persistent connection"""
     ok, err = check_cluster_access(cluster_id)
@@ -885,7 +885,7 @@ def get_sdn_zones(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/zones', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def create_sdn_zone(cluster_id):
     # NS: Zone types: simple, vlan, qinq, vxlan, evpn - each has different required params
     """Create a new SDN zone"""
@@ -913,7 +913,7 @@ def create_sdn_zone(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/zones/<zone_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def update_sdn_zone(cluster_id, zone_id):
     """Update an SDN zone"""
     ok, err = check_cluster_access(cluster_id)
@@ -940,7 +940,7 @@ def update_sdn_zone(cluster_id, zone_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/zones/<zone_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def delete_sdn_zone(cluster_id, zone_id):
     """Delete an SDN zone"""
     ok, err = check_cluster_access(cluster_id)
@@ -992,7 +992,7 @@ def get_sdn_vnets(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/vnets', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def create_sdn_vnet(cluster_id):
     """Create a new SDN VNet"""
     ok, err = check_cluster_access(cluster_id)
@@ -1019,7 +1019,7 @@ def create_sdn_vnet(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/vnets/<vnet_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def update_sdn_vnet(cluster_id, vnet_id):
     """Update an SDN VNet"""
     ok, err = check_cluster_access(cluster_id)
@@ -1046,7 +1046,7 @@ def update_sdn_vnet(cluster_id, vnet_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/vnets/<vnet_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def delete_sdn_vnet(cluster_id, vnet_id):
     """Delete an SDN VNet"""
     ok, err = check_cluster_access(cluster_id)
@@ -1098,7 +1098,7 @@ def get_sdn_subnets(cluster_id, vnet_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/vnets/<vnet_id>/subnets', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def create_sdn_subnet(cluster_id, vnet_id):
     """Create a subnet in a VNet"""
     ok, err = check_cluster_access(cluster_id)
@@ -1125,7 +1125,7 @@ def create_sdn_subnet(cluster_id, vnet_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/vnets/<vnet_id>/subnets/<subnet_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def delete_sdn_subnet(cluster_id, vnet_id, subnet_id):
     """Delete a subnet from a VNet"""
     ok, err = check_cluster_access(cluster_id)
@@ -1152,7 +1152,7 @@ def delete_sdn_subnet(cluster_id, vnet_id, subnet_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/apply', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def apply_sdn_config(cluster_id):
     """Apply pending SDN configuration changes to all nodes"""
     ok, err = check_cluster_access(cluster_id)
@@ -1208,7 +1208,7 @@ def get_sdn_controllers(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/controllers', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def create_sdn_controller(cluster_id):
     """Create a new SDN controller (BGP, EVPN, ISIS)"""
     ok, err = check_cluster_access(cluster_id)
@@ -1235,7 +1235,7 @@ def create_sdn_controller(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/controllers/<controller_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def update_sdn_controller(cluster_id, controller_id):
     """Update an SDN controller"""
     ok, err = check_cluster_access(cluster_id)
@@ -1262,7 +1262,7 @@ def update_sdn_controller(cluster_id, controller_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/controllers/<controller_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def delete_sdn_controller(cluster_id, controller_id):
     """Delete an SDN controller"""
     ok, err = check_cluster_access(cluster_id)
@@ -1318,7 +1318,7 @@ def get_sdn_ipams(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/ipams', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def create_sdn_ipam(cluster_id):
     """Create a new IPAM configuration (pve, netbox, phpipam)"""
     ok, err = check_cluster_access(cluster_id)
@@ -1345,7 +1345,7 @@ def create_sdn_ipam(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/ipams/<ipam_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def update_sdn_ipam(cluster_id, ipam_id):
     """Update an IPAM configuration"""
     ok, err = check_cluster_access(cluster_id)
@@ -1372,7 +1372,7 @@ def update_sdn_ipam(cluster_id, ipam_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/ipams/<ipam_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def delete_sdn_ipam(cluster_id, ipam_id):
     """Delete an IPAM configuration"""
     ok, err = check_cluster_access(cluster_id)
@@ -1428,7 +1428,7 @@ def get_sdn_dns(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/dns', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def create_sdn_dns(cluster_id):
     """Create a new DNS configuration (powerdns)"""
     ok, err = check_cluster_access(cluster_id)
@@ -1455,7 +1455,7 @@ def create_sdn_dns(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/dns/<dns_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def update_sdn_dns(cluster_id, dns_id):
     """Update a DNS configuration"""
     ok, err = check_cluster_access(cluster_id)
@@ -1482,7 +1482,7 @@ def update_sdn_dns(cluster_id, dns_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/dns/<dns_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def delete_sdn_dns(cluster_id, dns_id):
     """Delete a DNS configuration"""
     ok, err = check_cluster_access(cluster_id)
@@ -1558,7 +1558,7 @@ def get_sdn_vnet_details(cluster_id, vnet_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/sdn/vnets/<vnet_id>/subnets/<path:subnet_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['sdn.manage'])
 def update_sdn_subnet(cluster_id, vnet_id, subnet_id):
     """Update a subnet (DHCP range, gateway, etc.)"""
     ok, err = check_cluster_access(cluster_id)
@@ -1637,7 +1637,7 @@ def get_node_lvm_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/disks/lvm', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def create_node_lvm_api(cluster_id, node):
     """Create LVM volume group"""
     ok, err = check_cluster_access(cluster_id)
@@ -1678,7 +1678,7 @@ def get_node_lvmthin_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/disks/lvmthin', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def create_node_lvmthin_api(cluster_id, node):
     """Create LVM-Thin pool"""
     ok, err = check_cluster_access(cluster_id)
@@ -1719,7 +1719,7 @@ def get_node_zfs_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/disks/zfs', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def create_node_zfs_api(cluster_id, node):
     """Create ZFS pool"""
     ok, err = check_cluster_access(cluster_id)
@@ -1749,7 +1749,7 @@ def create_node_zfs_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/disks/directory', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def create_node_directory_api(cluster_id, node):
     """Create directory storage"""
     ok, err = check_cluster_access(cluster_id)
@@ -1777,7 +1777,7 @@ def create_node_directory_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/disks/initgpt', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def init_node_disk_gpt_api(cluster_id, node):
     """Initialize disk with GPT partition table"""
     ok, err = check_cluster_access(cluster_id)
@@ -1803,7 +1803,7 @@ def init_node_disk_gpt_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/disks/wipe', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def wipe_node_disk_api(cluster_id, node):
     """Wipe disk (delete partition table)"""
     ok, err = check_cluster_access(cluster_id)
@@ -1832,7 +1832,7 @@ def wipe_node_disk_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/sr/create', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def create_sr_api(cluster_id, node):
     """Create storage repository on XCP-ng node.
     LW: type-specific dispatch to NFS, iSCSI, LVM, EXT creation methods."""
@@ -1886,7 +1886,7 @@ def create_sr_api(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/sr/discover-iscsi', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def discover_iscsi_api(cluster_id, node):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err

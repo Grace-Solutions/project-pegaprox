@@ -430,7 +430,7 @@ def get_alerts():
     return jsonify(load_alerts_config())
 
 @bp.route('/api/alerts', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['alert.manage'])
 def create_alert():
     """Create a new alert"""
     data = request.json or {}
@@ -459,7 +459,7 @@ def create_alert():
     return jsonify(new_alert), 201
 
 @bp.route('/api/alerts/<alert_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['alert.manage'])
 def update_alert(alert_id):
     """Update an alert"""
     data = request.json or {}
@@ -483,7 +483,7 @@ def update_alert(alert_id):
     return jsonify({'error': 'Alert not found'}), 404
 
 @bp.route('/api/alerts/<alert_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['alert.manage'])
 def delete_alert(alert_id):
     """Delete an alert"""
     config = load_alerts_config()

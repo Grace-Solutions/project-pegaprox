@@ -3,7 +3,7 @@
         // DatastoreTab with storage cluster balancing
         // ═══════════════════════════════════════════════
         // Datastore Tab Component - with Storage Clusters for balancing
-        function DatastoreTab({ clusterId, addToast, initialStorage, initialNode }) {
+        function DatastoreTab({ clusterId, addToast, initialStorage, initialNode, sharedDatastoreData }) {
             const { t } = useTranslation();
             const { getAuthHeaders, isAdmin } = useAuth();
             const { isCorporate } = useLayout();
@@ -167,6 +167,22 @@
                 };
             };
             
+            // NS: use parent datastore data when available so sidebar + tab always match
+            useEffect(() => {
+                if (sharedDatastoreData && sharedDatastoreData.shared?.length > 0) {
+                    const sorted = stableSortData(sharedDatastoreData);
+                    datastoresRef.current = sorted;
+                    setDatastores(sorted);
+                    if (!initialLoadDone.current) {
+                        const expanded = { shared: true };
+                        sorted.nodes?.forEach(n => expanded[n] = true);
+                        setExpandedNodes(expanded);
+                        initialLoadDone.current = true;
+                        setLoading(false);
+                    }
+                }
+            }, [sharedDatastoreData]);
+
             useEffect(() => {
                 activeClusterIdRef.current = clusterId;
                 // LW: Reset ALL cluster-specific state when cluster changes
@@ -179,13 +195,15 @@
                 setEsxiHosts([]);  // NS: reset ESXi hosts too
                 setSelectedEsxi(null);
                 setEsxiVms([]);
-                
+
                 // Reset refs
                 initialLoadDone.current = false;  // Allow loading spinner again
                 datastoresRef.current = null;  // Clear cached data
                 fetchingRef.current = false;  // Reset fetch lock
-                
-                fetchDatastores();
+
+                if (!sharedDatastoreData || !sharedDatastoreData.shared?.length) {
+                    fetchDatastores();  // fallback: fetch independently if parent didn't pass data
+                }
                 fetchStorageClusters();
             }, [clusterId]);
 
@@ -804,7 +822,7 @@
             }
             
             const StorageRow = ({ storage, node, isShared }) => {
-                const usedPercent = storage.total ? (storage.used / storage.total * 100) : 0;
+                const usedPercent = storage.total ? Math.round(storage.used / storage.total * 100) : 0;
                 const isSelected = selectedStorage?.name === storage.storage && selectedStorage?.node === node;
                 
                 return (

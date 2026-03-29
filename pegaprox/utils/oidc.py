@@ -88,6 +88,8 @@ def get_oidc_settings() -> dict:
         'group_mappings': settings.get('oidc_group_mappings', []),
         # Display
         'button_text': settings.get('oidc_button_text', 'Sign in with Microsoft'),
+        # NS: allow disabling JWT sig verification for broken JWKS environments
+        'oidc_skip_jwt_verification': settings.get('oidc_skip_jwt_verification', False),
     }
 
 
@@ -253,7 +255,11 @@ def oidc_decode_id_token(id_token: str, expected_nonce: str = None,
     so existing deployments don't break during upgrade.
     """
     # NS Mar 2026 - try proper signature verification first
-    if PYJWT_AVAILABLE and config:
+    # can be disabled via settings for envs where JWKS is broken/unreachable
+    skip_verify = config.get('oidc_skip_jwt_verification', False) if config else False
+    if skip_verify:
+        logging.warning("[OIDC] JWT signature verification DISABLED by admin setting")
+    if PYJWT_AVAILABLE and config and not skip_verify:
         try:
             endpoints = get_oidc_endpoints(config)
             jwks_uri = endpoints.get('jwks', '')
@@ -264,10 +270,11 @@ def oidc_decode_id_token(id_token: str, expected_nonce: str = None,
 
                 signing_key = _jwks_clients[jwks_uri].get_signing_key_from_jwt(id_token)
 
+                # #188: support more algorithms (Authentik uses RS256, but others exist)
                 claims = pyjwt.decode(
                     id_token,
                     signing_key.key,
-                    algorithms=["RS256", "ES256"],
+                    algorithms=["RS256", "ES256", "PS256", "EdDSA"],
                     audience=config.get('client_id'),
                     options={
                         "verify_exp": True,
@@ -278,8 +285,9 @@ def oidc_decode_id_token(id_token: str, expected_nonce: str = None,
                     leeway=300,  # 5 min clock skew
                 )
 
-                # LW: validate nonce separately (PyJWT doesn't do it)
-                if expected_nonce and claims.get('nonce') != expected_nonce:
+                # #188: only validate nonce if token actually has one
+                # some providers (Authentik in certain configs) don't include nonce
+                if expected_nonce and claims.get('nonce') and claims['nonce'] != expected_nonce:
                     logging.warning(f"[OIDC] Nonce mismatch after sig verification")
                     return {'error': 'OIDC nonce mismatch - possible replay attack'}
 
@@ -287,7 +295,7 @@ def oidc_decode_id_token(id_token: str, expected_nonce: str = None,
 
         except Exception as e:
             # MK: don't break login if JWKS is temporarily unreachable
-            logging.warning(f"[OIDC] JWKS verification failed, falling back to unverified decode: {e}")
+            logging.warning(f"[OIDC] JWKS verification failed ({type(e).__name__}: {e}), falling back to unverified decode")
 
     # Fallback: decode without signature check (pre-PyJWT behavior)
     try:
@@ -309,7 +317,8 @@ def oidc_decode_id_token(id_token: str, expected_nonce: str = None,
             logging.warning(f"[OIDC] ID token expired: exp={exp}, now={time.time():.0f}")
             return {'error': 'ID token has expired'}
 
-        if expected_nonce and claims.get('nonce') != expected_nonce:
+        # #188: only fail on nonce mismatch if token has a nonce claim
+        if expected_nonce and claims.get('nonce') and claims['nonce'] != expected_nonce:
             logging.warning(f"[OIDC] Nonce mismatch: expected={expected_nonce[:8]}..., got={str(claims.get('nonce', ''))[:8]}...")
             return {'error': 'OIDC nonce mismatch - possible replay attack'}
 

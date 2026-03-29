@@ -74,6 +74,7 @@
                 oidc_auto_create_users: true,
                 oidc_button_text: 'Sign in with Microsoft',
                 oidc_group_mappings: [],
+                oidc_skip_jwt_verification: false,
             });
             const [oidcTesting, setOidcTesting] = useState(false);
             const [oidcTestResult, setOidcTestResult] = useState(null);
@@ -130,6 +131,7 @@
                 cert_info: null,
                 reverse_proxy_enabled: false,
                 trusted_proxies: '',
+                proxy_bind_address: '',
                 logo_url: '',
                 app_name: 'PegaProx',
                 default_theme: 'proxmoxDark',  // NS: Default theme for new users - Jan 2026
@@ -920,6 +922,7 @@
                             http_redirect_port: data.http_redirect_port || 0,
                             reverse_proxy_enabled: data.reverse_proxy_enabled || false,
                             trusted_proxies: data.trusted_proxies || '',
+                            proxy_bind_address: data.proxy_bind_address || '',
                             default_theme: data.default_theme || 'proxmoxDark',
                             login_background: data.login_background || '',
                             // SMTP settings
@@ -1128,6 +1131,7 @@
                     formData.append('ssl_enabled', serverSettings.ssl_enabled);
                     formData.append('reverse_proxy_enabled', serverSettings.reverse_proxy_enabled);
                     formData.append('trusted_proxies', serverSettings.trusted_proxies || '');
+                    formData.append('proxy_bind_address', serverSettings.proxy_bind_address || '');
                     formData.append('default_theme', serverSettings.default_theme || 'proxmoxDark');
                     // NS: alert recipients live in the same tab - must send them too (#131)
                     formData.append('alert_email_recipients', JSON.stringify(serverSettings.alert_email_recipients || []));
@@ -1148,7 +1152,7 @@
                     const response = await fetch(`${API_URL}/settings/server`, {
                         method: 'POST',
                         credentials: 'include',
-                        headers: getAuthHeaders(),
+                        headers: { ...getAuthHeaders(), 'X-Requested-With': 'XMLHttpRequest' },
                         body: formData
                     });
                     
@@ -4301,7 +4305,35 @@
                                                 placeholder="Sign in with Microsoft" className="w-full px-3 py-2 bg-proxmox-secondary border border-proxmox-border rounded-lg text-white text-sm" />
                                         </div>
                                     </div>
-                                    
+
+                                    {/* NS: Mar 2026 - JWT verification toggle for broken JWKS environments */}
+                                    <div className="bg-proxmox-dark border border-proxmox-border rounded-xl p-4 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="text-white font-medium flex items-center gap-2">
+                                                <Icons.Shield />
+                                                {t('jwtVerification') || 'JWT Signature Verification'}
+                                            </h4>
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input type="checkbox"
+                                                    checked={oidcConfig.oidc_skip_jwt_verification}
+                                                    onChange={e => setOidcConfig(prev => ({...prev, oidc_skip_jwt_verification: e.target.checked}))}
+                                                    className="rounded border-proxmox-border bg-proxmox-darker" />
+                                                <span className="text-sm text-gray-300">{t('disableJwtVerification') || 'Disable Verification'}</span>
+                                            </label>
+                                        </div>
+                                        {oidcConfig.oidc_skip_jwt_verification && (
+                                            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                                                <p className="text-sm text-red-400 font-medium mb-1">⚠ {t('securityWarning') || 'Security Warning'}</p>
+                                                <p className="text-xs text-red-400/80">{t('jwtVerificationWarning') || 'Disabling JWT signature verification allows tokens to be accepted without cryptographic proof. This makes your login vulnerable to token forgery. Only disable this if your identity provider has a broken or unreachable JWKS endpoint and you understand the risk.'}</p>
+                                            </div>
+                                        )}
+                                        {!oidcConfig.oidc_skip_jwt_verification && (
+                                            <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                                                <p className="text-xs text-green-400">✓ {t('jwtVerificationEnabled') || 'JWT signatures are verified via JWKS endpoint. This is the recommended setting.'}</p>
+                                            </div>
+                                        )}
+                                    </div>
+
                                     {/* NS: Feb 2026 - Unified Group-Role Mapping */}
                                     <div className="bg-proxmox-dark border border-proxmox-border rounded-xl p-4 space-y-3">
                                         <div className="flex items-center justify-between">
@@ -4612,6 +4644,17 @@
                                                         className="w-full px-3 py-2 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm focus:outline-none focus:border-proxmox-orange"
                                                     />
                                                     <p className="text-xs text-gray-500 mt-1">{t('trustedProxiesHint')}</p>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm text-gray-400 mb-1">{t('proxyBindAddress')}</label>
+                                                    <input
+                                                        type="text"
+                                                        value={serverSettings.proxy_bind_address}
+                                                        onChange={e => setServerSettings({...serverSettings, proxy_bind_address: e.target.value})}
+                                                        placeholder="127.0.0.1"
+                                                        className="w-full px-3 py-2 bg-proxmox-darker border border-proxmox-border rounded-lg text-white text-sm focus:outline-none focus:border-proxmox-orange"
+                                                    />
+                                                    <p className="text-xs text-gray-500 mt-1">{t('proxyBindAddressHint')}</p>
                                                 </div>
                                                 <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                                                     <p className="text-sm text-yellow-400">{t('reverseProxyWarning')}</p>

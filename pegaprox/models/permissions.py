@@ -83,6 +83,15 @@ PERMISSIONS = {
     'replication.view': 'View replication jobs',
     'replication.manage': 'Create/delete replication',
 
+    # Ceph
+    'ceph.manage': 'Manage Ceph OSD, pools, monitors, MDS',
+
+    # SDN
+    'sdn.manage': 'Manage SDN zones, vnets, subnets, controllers',
+
+    # Alerts
+    'alert.manage': 'Create, edit, delete alert rules',
+
     # Site Recovery - NS Mar 2026
     'site_recovery.view': 'View recovery plans and events',
     'site_recovery.manage': 'Create/edit/delete recovery plans and VMs',
@@ -142,6 +151,8 @@ PERMISSIONS = {
     'vmware.host.view': 'View ESXi host details',
     'vmware.datastore.view': 'View VMware datastores',
     'vmware.network.view': 'View VMware networks',
+    'vmware.vm.manage': 'Modify VMware VM configuration',
+    'vmware.cluster.manage': 'Manage VMware cluster settings (DRS, HA)',
 
     # XCP-ng / XAPI permissions - NS Mar 2026
     'xapi.view': 'View XCP-ng pools and status',
@@ -183,7 +194,7 @@ ROLE_PERMISSIONS = {
         'pbs.jobs.view', 'pbs.tasks.view',
         'pbs.notifications.view', 'pbs.traffic.view', 'pbs.disks.view', 'pbs.subscription.view',
         'vmware.view', 'vmware.vm.view', 'vmware.vm.power', 'vmware.vm.snapshot',
-        'vmware.vm.migrate', 'vmware.host.view', 'vmware.datastore.view', 'vmware.network.view',
+        'vmware.vm.migrate', 'vmware.vm.manage', 'vmware.host.view', 'vmware.datastore.view', 'vmware.network.view',
         'xapi.view', 'xapi.vm.view', 'xapi.vm.power', 'xapi.vm.snapshot',
         'xapi.vm.clone', 'xapi.vm.config', 'xapi.vm.migrate',
         'xapi.host.view', 'xapi.storage.view', 'xapi.network.view', 'xapi.template.view',

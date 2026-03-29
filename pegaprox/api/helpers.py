@@ -98,6 +98,7 @@ def load_server_settings():
         # NS: Mar 2026 - reverse proxy support (nginx/haproxy)
         'reverse_proxy_enabled': False,
         'trusted_proxies': '',  # comma-separated IPs/CIDRs, empty = loopback only
+        'proxy_bind_address': '',  # custom bind addr when behind proxy on different host
         # OIDC defaults
         'oidc_enabled': False,
         'oidc_provider': 'entra',
@@ -115,6 +116,7 @@ def load_server_settings():
         'oidc_auto_create_users': True,
         'oidc_button_text': 'Sign in with Microsoft',
         'oidc_group_mappings': [],
+        'oidc_skip_jwt_verification': False,  # NS: disable JWT sig check for broken JWKS envs
     }
     
     try:

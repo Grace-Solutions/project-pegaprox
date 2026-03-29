@@ -459,7 +459,7 @@ def get_cluster_group_lb_history(group_id):
 
 
 @bp.route('/api/cluster-groups/<group_id>/balance-now', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def trigger_xclb_balance_now(group_id):
     """Manual cross-cluster balance trigger (#149)"""
     db = get_db()
@@ -525,7 +525,8 @@ def get_node_apt_updates_api(cluster_id, node):
     try:
         return jsonify(manager.get_node_apt_updates(node))
     except Exception as e:
-        return jsonify({'error': f'Failed to check updates: {str(e)}', 'updates': []}), 500
+        logging.error(f"[API] Failed to check updates: {e}")
+        return jsonify({'error': 'Failed to check updates', 'updates': []}), 500
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/apt/refresh', methods=['POST'])

@@ -139,9 +139,19 @@
                 // Build raw labels first
                 const rawLabels = [];
                 if (timestamps && timestamps.length === rawLength) {
+                    // #231: auto-detect span to choose label format
+                    const span = timestamps[timestamps.length - 1] - timestamps[0];
+                    const useDateOnly = span > 86400 * 14;  // > 2 weeks
+                    const useDate = span > 86400 * 2;        // > 2 days
                     for (let i = 0; i < timestamps.length; i++) {
                         const d = new Date(timestamps[i] * 1000);
-                        rawLabels.push(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                        if (useDateOnly) {
+                            rawLabels.push(d.toLocaleDateString([], { month: 'short', day: 'numeric' }));
+                        } else if (useDate) {
+                            rawLabels.push(d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                        } else {
+                            rawLabels.push(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                        }
                     }
                 } else {
                     for (let i = 0; i < rawLength; i++) {
@@ -228,9 +238,12 @@
                                     enabled: true,
                                     mode: 'index',
                                     intersect: false,
-                                    backgroundColor: 'rgba(30, 30, 40, 0.95)',
-                                    titleColor: '#e5e7eb',
-                                    bodyColor: '#fff',
+                                    // NS: adapt tooltip to corp light mode
+                                    backgroundColor: document.body.dataset.corpTheme === 'light' ? 'rgba(255,255,255,0.95)' : 'rgba(30, 30, 40, 0.95)',
+                                    titleColor: document.body.dataset.corpTheme === 'light' ? '#333' : '#e5e7eb',
+                                    bodyColor: document.body.dataset.corpTheme === 'light' ? '#555' : '#fff',
+                                    borderColor: document.body.dataset.corpTheme === 'light' ? '#cfd8dc' : 'rgba(255,255,255,0.1)',
+                                    borderWidth: document.body.dataset.corpTheme === 'light' ? 1 : 0,
                                     callbacks: {
                                         label: function(c) {
                                             var val = c.parsed.y;
@@ -245,19 +258,19 @@
                             scales: {
                                 x: {
                                     ticks: {
-                                        color: '#6b7280',
+                                        color: document.body.dataset.corpTheme === 'light' ? '#888' : '#6b7280',
                                         font: { size: 10 },
                                         maxTicksLimit: 8,
                                         maxRotation: 0,
                                     },
-                                    grid: { color: 'rgba(75, 85, 99, 0.3)' }
+                                    grid: { color: document.body.dataset.corpTheme === 'light' ? 'rgba(0,0,0,0.08)' : 'rgba(75, 85, 99, 0.3)' }
                                 },
                                 y: {
                                     beginAtZero: true,
                                     min: yMin,
                                     max: yMax,
                                     ticks: {
-                                        color: '#6b7280',
+                                        color: document.body.dataset.corpTheme === 'light' ? '#888' : '#6b7280',
                                         font: { size: 10 },
                                         callback: function(value) {
                                             var fn = formatRef.current;
@@ -265,7 +278,7 @@
                                             return value.toFixed(yMax && yMax <= 10 ? 1 : 0) + unitStr;
                                         }
                                     },
-                                    grid: { color: 'rgba(75, 85, 99, 0.3)' }
+                                    grid: { color: document.body.dataset.corpTheme === 'light' ? 'rgba(0,0,0,0.08)' : 'rgba(75, 85, 99, 0.3)' }
                                 }
                             }
                         }

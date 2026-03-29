@@ -37,10 +37,17 @@ def list_pbs_servers():
     try:
         db = get_db()
         cursor = db.conn.cursor()
-        cursor.execute("SELECT id, name, host, port, enabled FROM pbs_servers")
+        cursor.execute("SELECT id, name, host, port, enabled, linked_clusters FROM pbs_servers")
         for row in cursor.fetchall():
             row_dict = dict(row)
             if row_dict['id'] not in pbs_managers:
+                # NS: parse linked_clusters so frontend can filter by cluster
+                linked = []
+                try:
+                    import json
+                    linked = json.loads(row_dict.get('linked_clusters', '[]') or '[]')
+                except Exception:
+                    pass
                 result.append({
                     'id': row_dict['id'],
                     'name': row_dict['name'],
@@ -48,6 +55,7 @@ def list_pbs_servers():
                     'port': row_dict['port'],
                     'enabled': bool(row_dict['enabled']),
                     'connected': False,
+                    'linked_clusters': linked,
                 })
     except Exception:
         pass

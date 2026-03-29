@@ -1,7 +1,7 @@
 {
-    "version": "0.9.3.1",
-    "build": "2026.03.25",
-    "release_date": "2026-03-25",
+    "version": "0.9.4",
+    "build": "2026.03.29",
+    "release_date": "2026-03-29",
     "min_python": "3.8",
     "download_url": "https://github.com/PegaProx/project-pegaprox/releases/latest",
     "update_archive": "https://github.com/PegaProx/project-pegaprox/archive/refs/heads/main.tar.gz",
@@ -164,22 +164,20 @@
         "web/src/vm_modals.js"
     ],
     "changelog": [
-        "Portuguese (PT-BR) language support (#135)",
-        "Allow cluster creation with SSH key only, no password required (#138)",
-        "CIS hardening: PegaProx recommendations (AppArmor, Disable Services, Sysctl, Auditd)",
-        "CIS hardening: configurable DNS nameservers for backup_dns control",
-        "CIS hardening: reboot-required badge for audit_boot / mem_protection",
-        "CIS hardening: confirmation dialog before applying controls",
-        "Fix maintenance mode detection and Ceph flag handling (#141)",
-        "Fix hardening detection for postfix_banner, default_umask, audit_boot, mem_protection",
-        "Change auto-migrate default to disabled for new clusters (#136)",
-        "XCP-ng feature parity: RRD metrics, guest IPs, pool HA, PIFs"
-    ],
-    "changelog": [
-        "fix: CRITICAL — user accounts wiped on restart with OIDC/LDAP users (#224)",
-        "fix: site recovery failover greenlet crash handler — prevents stuck 'running' status (#225)",
-        "fix: CVE scanner empty results on PVE 9 Trixie — suite detection fallback",
-        "fix: docs — wrong VNC/SSH WebSocket paths in nginx + Traefik config (#221)"
+        "Network View in Corporate Layout sidebar with per-node bridge/VM mapping",
+        "Custom bind address option for reverse proxy setups (#212)",
+        "OIDC JWT verification toggle for environments with unreachable JWKS",
+        "Corporate Layout light mode improvements",
+        "Language picker dropdown for Corporate Layout (PR #236)",
+        "Community plugin: proxmox-ha (PR #226), Spanish translations (PR #234)",
+        "Fix cross-cluster replication storage mapping (#192)",
+        "Fix site recovery stuck plans and race conditions (#238)",
+        "Fix container and local disk migration with multiple storages",
+        "Fix guest agent log spam when QEMU agent disabled (#237)",
+        "Fix background image upload behind reverse proxy (#210)",
+        "Fix topology diagram layout stability",
+        "Fix PBS cluster filtering in topology (#142)",
+        "Various security hardening and permission fixes"
     ],
     "breaking_changes": []
 }

@@ -2294,6 +2294,13 @@ class PegaProxDB:
         ))
         self.conn.commit()
     
+    # MK: whitelist for update_cluster to prevent SQL injection via dict keys
+    _CLUSTER_FIELDS = frozenset({
+        'name', 'host', 'port', 'user', 'password_encrypted', 'cluster_type',
+        'auto_balance', 'balance_threshold', 'balance_local_disks', 'migration_tolerance',
+        'ha_enabled', 'ha_check_interval', 'smbios_autoconfig', 'max_migrations_per_cycle',
+    })
+
     def update_cluster(self, cluster_id: str, fields: dict):
         """Partial update of cluster fields - MK Feb 2026"""
         if not fields:
@@ -2302,8 +2309,13 @@ class PegaProxDB:
         sets = []
         vals = []
         for key, value in fields.items():
+            if key not in self._CLUSTER_FIELDS:
+                logging.warning(f"[DB] update_cluster: rejected unknown field '{key}'")
+                continue
             sets.append(f"{key} = ?")
             vals.append(value)
+        if not sets:
+            return
         sets.append("updated_at = ?")
         vals.append(datetime.now().isoformat())
         vals.append(cluster_id)

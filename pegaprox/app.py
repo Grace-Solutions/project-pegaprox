@@ -158,6 +158,7 @@ def create_app():
                 has_valid_origin = origin and (
                     origin in allowed_origins or
                     origin.startswith(f"{request.scheme}://{request.host}") or
+                    origin.startswith(f"{fwd_proto}://{request.host}") or  # #210: proxy sends Host but not X-Forwarded-Host
                     (fwd_host and origin.startswith(f"{fwd_proto}://{fwd_host}"))
                 )
                 if not has_xhr and not has_valid_origin:
@@ -634,6 +635,18 @@ def main(debug_mode=False):
     start_cross_cluster_replication_thread()
     print("Started cross-cluster replication scheduler thread")
 
+    # #238: reset stuck DR plans from a previous crash/restart
+    try:
+        from datetime import datetime as _dt
+        _db = get_db()
+        stuck = _db.query("SELECT id, name FROM site_recovery_plans WHERE status IN ('running', 'testing')")
+        for p in (stuck or []):
+            _db.execute("UPDATE site_recovery_plans SET status = 'failed', updated_at = ? WHERE id = ?",
+                        (_dt.now().isoformat(), p['id']))
+            print(f"  Reset stuck DR plan '{p['name']}' → failed")
+    except Exception as e:
+        print(f"  DR plan reset check failed: {e}")
+
     from pegaprox.background.site_recovery import start_heartbeat
     start_heartbeat()
     print("Started site recovery heartbeat monitor")
@@ -699,8 +712,13 @@ def main(debug_mode=False):
 
     if not bind_host:
         if reverse_proxy:
-            bind_host = '127.0.0.1'
-            print("Reverse proxy mode — binding to 127.0.0.1 only")
+            custom_bind = server_settings.get('proxy_bind_address', '').strip()
+            if custom_bind:
+                bind_host = custom_bind
+                print(f"Reverse proxy mode — custom bind: {bind_host}")
+            else:
+                bind_host = '127.0.0.1'
+                print("Reverse proxy mode — binding to 127.0.0.1 only")
         elif _test_ipv6_available():
             bind_host = '::'
             print("IPv6 available — binding dual-stack (::)")

@@ -64,7 +64,7 @@ def plugin_proxy(plugin_id, subpath):
         return result
     except Exception as e:
         logging.error(f"[PLUGINS] {plugin_id}/{subpath} error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Plugin request failed'}), 500
 
 
 # ---- Discovery & State ----

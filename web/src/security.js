@@ -1374,7 +1374,7 @@
                     const res = await fetch(`${API_URL}/config/restore`, {
                         method: 'POST',
                         credentials: 'include',
-                        headers: getAuthHeaders(),  // Don't set Content-Type for FormData
+                        headers: { ...getAuthHeaders(), 'X-Requested-With': 'XMLHttpRequest' },
                         body: formData
                     });
                     

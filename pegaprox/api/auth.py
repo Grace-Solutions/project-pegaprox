@@ -133,6 +133,11 @@ def oidc_callback():
     
     # NS: Verify CSRF state + extract nonce + PKCE verifier (#188)
     stored_cookie = request.cookies.get('oidc_state', '')
+    # #188: verbose logging for debugging cookie issues behind reverse proxy
+    if not stored_cookie:
+        logging.warning(f"[OIDC] oidc_state cookie MISSING — browser didn't send it back. Check proxy cookie forwarding.")
+    else:
+        logging.debug(f"[OIDC] oidc_state cookie present ({len(stored_cookie)} chars)")
     stored_nonce = None
     stored_verifier = None
     cookie_parts = stored_cookie.split(':')
@@ -142,8 +147,8 @@ def oidc_callback():
     if len(cookie_parts) >= 3:
         stored_verifier = cookie_parts[2]
     if not stored_state or stored_state != state:
-        logging.warning(f"[OIDC] State mismatch - possible CSRF attack")
-        return jsonify({'error': 'Invalid state parameter (CSRF protection)'}), 400
+        logging.warning(f"[OIDC] State mismatch — stored={stored_state[:8] if stored_state else 'EMPTY'}..., received={state[:8] if state else 'EMPTY'}...")
+        return jsonify({'error': 'Invalid state parameter (CSRF protection). Your browser may not be sending cookies — check reverse proxy configuration.'}), 400
 
     # Step 1: Exchange code for tokens (with PKCE verifier if available)
     token_data = oidc_exchange_code(config, code, code_verifier=stored_verifier)
@@ -163,7 +168,7 @@ def oidc_callback():
         id_claims = oidc_decode_id_token(id_token_raw, expected_nonce=stored_nonce, config=config)
         if 'error' in id_claims:
             logging.warning(f"[OIDC] ID token validation failed: {id_claims['error']}")
-            return jsonify({'error': 'Authentication failed - token validation error'}), 401
+            return jsonify({'error': f"Authentication failed - {id_claims['error']}"}), 401
     
     # Step 3: Get user info from provider
     user_info = oidc_get_user_info(config, access_token)
@@ -831,20 +836,20 @@ def get_cluster_creds_internal(cluster_id):
 
     mgr = cluster_managers[cluster_id]
 
-    # Check cluster access and permissions for this user - NS Feb 2026
+    # NS Mar 2026: use standard cluster access check (validates user's cluster assignments + tenant)
+    from pegaprox.api.helpers import check_cluster_access
+    ok, err = check_cluster_access(cluster_id)
+    if not ok:
+        return err
+
+    # Check permissions - NS Feb 2026
     users_db = load_users()
     user_data = users_db.get(session['user'], {})
     is_admin = user_data.get('role') == ROLE_ADMIN
-    user_clusters = user_data.get('clusters', [])
-
-    if not is_admin and user_clusters and cluster_id not in user_clusters:
-        return jsonify({'error': 'Access denied to this cluster'}), 403
-
-    # NS Feb 2026: Require admin role or node.shell permission (was missing - critical security fix)
     user_perms = get_user_permissions(user_data)
     if not is_admin and 'node.shell' not in user_perms:
         logging.warning(f"[CLUSTER-CREDS] User {session['user']} lacks node.shell permission")
-        return jsonify({'error': 'Permission denied - requires admin or node.shell permission'}), 403
+        return jsonify({'error': 'Permission denied'}), 403
     
     # Get node IPs - the cluster_host is our reliable fallback
     node_ips = {}
@@ -937,9 +942,9 @@ def get_cluster_creds_internal(cluster_id):
             logging.info(f"[CLUSTER-CREDS] No nodes found, using default: {cluster_host}")
     
     # NS Feb 2026: Never expose Proxmox password via API - shell proxy handles auth server-side
+    # NS Mar 2026: removed user field from response, only SSH proxy needs it internally
     return jsonify({
         'host': cluster_host,
-        'user': mgr.config.user,
         'node_ips': node_ips
     })
 

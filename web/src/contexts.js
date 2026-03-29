@@ -67,7 +67,7 @@
                     >
                         <span className="text-base leading-none" aria-hidden="true">{activeLanguage.flag}</span>
                         <select
-                            value={activeLanguage.code}
+                            value={language}
                             onChange={(e) => changeLanguage(e.target.value)}
                             className="bg-transparent text-xs text-gray-200 border-0 p-0 pr-6 focus:ring-0 focus:outline-none"
                             aria-label="Select language"

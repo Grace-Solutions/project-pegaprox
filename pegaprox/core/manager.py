@@ -193,6 +193,8 @@ class PegaProxManager:
         # disk usage from guest agent: (node, vmid) -> {used, total}
         self._disk_cache = {}
         self._disk_cache_lock = threading.Lock()
+        # #237: track VMs where guest agent is disabled to avoid spamming PVE with failed requests
+        self._no_agent_vms = set()  # vmids with no agent (cleared on VM start/config change)
 
         # update tracking
         self.nodes_updating = {}
@@ -1058,9 +1060,16 @@ class PegaProxManager:
         """Fetch IP addresses from QEMU guest agent for a running VM.
         Returns IPv4 addresses first, then IPv6 (so ips[0] is primary IPv4 when available).
         Returns [] if agent not running, VM unreachable, or any error."""
+        # #237: skip VMs known to have no guest agent to avoid pvedaemon error spam
+        if vmid in self._no_agent_vms:
+            return []
         try:
             url = f"https://{self.host}:8006/api2/json/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
             resp = self._create_session().get(url, timeout=8)
+            if resp.status_code == 500:
+                # agent socket not available — remember this VM
+                self._no_agent_vms.add(vmid)
+                return []
             if resp.status_code != 200:
                 return []
             interfaces = resp.json().get('data', {}).get('result', [])
@@ -1622,6 +1631,35 @@ class PegaProxManager:
             pass
         return None
 
+    def _get_vm_storage_map(self, node, vmid, vm_type):
+        """Get all local storages used by a VM/CT for migration mapping.
+        Returns dict like {'rootfs': 'local-lvm', 'mp0': 'local-zfs'} for LXC
+        or {'scsi0': 'local-lvm', 'scsi1': 'local-zfs'} for QEMU."""
+        result = {}
+        try:
+            ep = 'lxc' if vm_type == 'lxc' else 'qemu'
+            url = f"https://{self.host}:8006/api2/json/nodes/{node}/{ep}/{vmid}/config"
+            r = self._create_session().get(url, timeout=10)
+            if r.status_code != 200:
+                return result
+            cfg = r.json().get('data', {})
+            if vm_type == 'lxc':
+                # rootfs + mount points
+                for k, v in cfg.items():
+                    if (k == 'rootfs' or k.startswith('mp')) and isinstance(v, str) and ':' in v:
+                        stor = v.split(':')[0]
+                        if stor and stor != 'none':
+                            result[k] = stor
+            else:
+                for k, v in cfg.items():
+                    if k.startswith(('scsi', 'virtio', 'ide', 'sata')) and isinstance(v, str) and ':' in v:
+                        stor = v.split(':')[0]
+                        if stor and stor != 'none':
+                            result[k] = stor
+        except Exception:
+            pass
+        return result
+
     # MK Mar 2026 - predictive analysis engine for resource forecasting
     # uses weighted moving average over historical metrics to predict bottlenecks
     # before they happen. Feeds into the migration scheduler when enabled.
@@ -1728,10 +1766,16 @@ class PegaProxManager:
                     'restart': 1
                 }
                 if has_local_disks:
-                    stor = self._get_vm_storage(source_node, vmid, 'lxc')
-                    if stor:
-                        data['target-storage'] = stor
-                    self.logger.info(f"container migration with restart, target-storage={stor}")
+                    # PVE wants "rootfs=stor,mp0=stor2" mapping for LXC
+                    stor_map = self._get_vm_storage_map(source_node, vmid, 'lxc')
+                    if stor_map:
+                        # map each volume to itself (same storage name on target)
+                        data['target-storage'] = ','.join(f"{k}={v}" for k, v in stor_map.items())
+                    else:
+                        stor = self._get_vm_storage(source_node, vmid, 'lxc')
+                        if stor:
+                            data['target-storage'] = stor
+                    self.logger.info(f"container migration with restart, target-storage={data.get('target-storage')}")
             else:
                 data = {
                     'target': target_node,
@@ -1739,10 +1783,17 @@ class PegaProxManager:
                 }
                 if has_local_disks:
                     data['with-local-disks'] = 1
-                    stor = self._get_vm_storage(source_node, vmid, 'qemu')
-                    if stor:
-                        data['targetstorage'] = stor
-                    self.logger.info(f"local disk migration, targetstorage={stor}")
+                    # PVE wants "source_stor:target_stor" mapping for QEMU local disks
+                    stor_map = self._get_vm_storage_map(source_node, vmid, 'qemu')
+                    if stor_map:
+                        # dedupe: unique "stor:stor" pairs (same name = migrate to same storage on target)
+                        unique = list(dict.fromkeys(stor_map.values()))
+                        data['targetstorage'] = ','.join(f"{s}:{s}" for s in unique)
+                    else:
+                        stor = self._get_vm_storage(source_node, vmid, 'qemu')
+                        if stor:
+                            data['targetstorage'] = stor
+                    self.logger.info(f"local disk migration, targetstorage={data.get('targetstorage')}")
             
             local_info = ' (local disks)' if has_local_disks else ''
             self.logger.info(f"migrating {vm.get('name', 'unnamed')} ({vmid}) {source_node} -> {target_node}{local_info}")
@@ -6818,8 +6869,11 @@ echo "AGENT_INSTALLED_OK"
             
             self.logger.info(f"VM Action: {action} on {vm_type}/{vmid}@{node}" + (" FORCE" if force else ""))
             resp = self._api_post(url, data=data if data else None)
-            
+
             if resp.status_code == 200:
+                # #237: clear no-agent cache on start/reboot so agent gets re-checked
+                if action in ('start', 'reboot', 'reset'):
+                    self._no_agent_vms.discard(vmid)
                 self.logger.info(f"[OK] {action} on {vmid}")
                 return {'success': True, 'data': resp.json().get('data')}
             else:
@@ -6866,6 +6920,7 @@ echo "AGENT_INSTALLED_OK"
             if description:
                 data['description'] = description
             
+            self._no_agent_vms.discard(newid)  # #237
             self.logger.info(f"Cloning {vm_type}/{vmid} to {newid} (full={full})")
             response = self._api_post(url, data=data)
             
@@ -7162,6 +7217,8 @@ echo "AGENT_INSTALLED_OK"
                 params['destroy-unreferenced-disks'] = 1
 
             self.logger.info(f"Deleting {vm_type}/{vmid} on {node} with params: {params}")
+            # #237: clear agent cache for this vmid
+            self._no_agent_vms.discard(vmid)
             response = self._create_session().delete(url, params=params)
 
             if response.status_code == 200:
@@ -9576,7 +9633,7 @@ echo "AGENT_INSTALLED_OK"
 
                 return node, net_data, vm_bridges
 
-            tasks = [lambda n=node: fetch_node(n) for n in online_nodes]
+            tasks = [lambda n=n: fetch_node(n) for n in online_nodes]
             results = run_concurrent(tasks, timeout=15)
 
             network_map = {}
@@ -12281,9 +12338,14 @@ echo DONE""",
     def _fetch_qemu_ips(self, node: str, vmid: int) -> list:
         """Fetch IP addresses from QEMU guest agent for a running VM.
         Returns IPv4 addresses first, then IPv6."""
+        if vmid in self._no_agent_vms:
+            return []
         try:
             url = f"https://{self.host}:8006/api2/json/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
             resp = self._create_session().get(url, timeout=8)
+            if resp.status_code == 500:
+                self._no_agent_vms.add(vmid)
+                return []
             if resp.status_code != 200:
                 return []
             interfaces = resp.json().get('data', {}).get('result', [])
@@ -12310,9 +12372,14 @@ echo DONE""",
     def _fetch_qemu_disk_usage(self, node: str, vmid: int) -> dict:
         """Get actual filesystem usage from guest agent (get-fsinfo).
         Returns {used, total} in bytes, or empty dict if unavailable."""
+        if vmid in self._no_agent_vms:
+            return {}
         try:
             url = f"https://{self.host}:8006/api2/json/nodes/{node}/qemu/{vmid}/agent/get-fsinfo"
             resp = self._create_session().get(url, timeout=8)
+            if resp.status_code == 500:
+                self._no_agent_vms.add(vmid)
+                return {}
             if resp.status_code != 200:
                 return {}
             filesystems = resp.json().get('data', {}).get('result', [])

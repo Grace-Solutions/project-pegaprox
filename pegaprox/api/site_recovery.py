@@ -191,8 +191,12 @@ def delete_plan(plan_id):
     if not plan:
         return jsonify({'error': 'Plan not found'}), 404
 
-    if plan['status'] == 'running':
-        return jsonify({'error': 'Cannot delete a running plan'}), 409
+    # #238: allow force-delete of stuck plans via ?force=1 query param
+    if plan['status'] in ('running', 'testing'):
+        force = request.args.get('force', '').lower() in ('1', 'true')
+        if not force:
+            return jsonify({'error': 'Plan is currently active. Use force=1 to delete anyway.'}), 409
+        logging.warning(f"[SR] Force-deleting plan '{plan['name']}' while status={plan['status']}")
 
     db = get_db()
     db.execute('DELETE FROM site_recovery_vms WHERE plan_id = ?', (plan_id,))
@@ -395,12 +399,13 @@ def execute_planned_failover(plan_id):
     if not vms:
         return jsonify({'error': 'No VMs in plan'}), 400
 
-    from pegaprox.background.site_recovery import execute_failover
-    _safe_spawn_failover(execute_failover, plan_id, 'planned')
-
+    # NS: set status BEFORE spawning greenlet to avoid race condition
     db = get_db()
     now = datetime.utcnow().isoformat()
     db.execute("UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ?", (now, plan_id))
+
+    from pegaprox.background.site_recovery import execute_failover
+    _safe_spawn_failover(execute_failover, plan_id, 'planned')
 
     usr = getattr(request, 'session', {}).get('user', 'system')
     log_audit(usr, 'site_recovery.failover', f"Planned failover started: {plan['name']}")
@@ -426,12 +431,12 @@ def execute_emergency_failover(plan_id):
     if not vms:
         return jsonify({'error': 'No VMs in plan'}), 400
 
-    from pegaprox.background.site_recovery import execute_failover
-    _safe_spawn_failover(execute_failover, plan_id, 'emergency')
-
     db = get_db()
     now = datetime.utcnow().isoformat()
     db.execute("UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ?", (now, plan_id))
+
+    from pegaprox.background.site_recovery import execute_failover
+    _safe_spawn_failover(execute_failover, plan_id, 'emergency')
 
     usr = getattr(request, 'session', {}).get('user', 'system')
     log_audit(usr, 'site_recovery.emergency', f"Emergency failover started: {plan['name']}")
@@ -452,12 +457,12 @@ def execute_test_failover(plan_id):
     if not tgt_mgr or not tgt_mgr.is_connected:
         return jsonify({'error': 'Target cluster not reachable'}), 503
 
-    from pegaprox.background.site_recovery import execute_test_failover
-    _safe_spawn_failover(execute_test_failover, plan_id)
-
     db = get_db()
     now = datetime.utcnow().isoformat()
     db.execute("UPDATE site_recovery_plans SET status = 'testing', updated_at = ? WHERE id = ?", (now, plan_id))
+
+    from pegaprox.background.site_recovery import execute_test_failover
+    _safe_spawn_failover(execute_test_failover, plan_id)
 
     usr = getattr(request, 'session', {}).get('user', 'system')
     log_audit(usr, 'site_recovery.test', f"Test failover started: {plan['name']}")
@@ -499,12 +504,12 @@ def execute_failback(plan_id):
     if not original_tgt or not original_tgt.is_connected:
         return jsonify({'error': 'Current cluster (original target) not reachable'}), 503
 
-    from pegaprox.background.site_recovery import execute_failover
-    _safe_spawn_failover(execute_failover, plan_id, 'failback')
-
     db = get_db()
     now = datetime.utcnow().isoformat()
     db.execute("UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ?", (now, plan_id))
+
+    from pegaprox.background.site_recovery import execute_failover
+    _safe_spawn_failover(execute_failover, plan_id, 'failback')
 
     usr = getattr(request, 'session', {}).get('user', 'system')
     log_audit(usr, 'site_recovery.failback', f"Failback started: {plan['name']}")

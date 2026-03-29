@@ -222,7 +222,7 @@ def get_cluster_nodes(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.delete'])
+@require_auth(perms=['cluster.delete'])
 def delete_cluster(cluster_id):
     """Delete a cluster"""
     if cluster_id not in cluster_managers:
@@ -272,7 +272,7 @@ def delete_cluster(cluster_id):
 
 
 @bp.route('/api/clusters/reorder', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def reorder_clusters():
     """Update cluster sort order for sidebar display
     
@@ -305,7 +305,7 @@ def reorder_clusters():
 
 
 @bp.route('/api/clusters/<cluster_id>/sort-order', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def update_cluster_sort_order(cluster_id):
     """Update a single cluster's sort order
     
@@ -450,7 +450,7 @@ ALLOWED_CONFIG_FIELDS = {
 }
 
 @bp.route('/api/clusters/<cluster_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def update_cluster_config(cluster_id):
     """Update cluster configuration"""
     if cluster_id not in cluster_managers:
@@ -475,7 +475,7 @@ def update_cluster_config(cluster_id):
     return jsonify({'message': 'Configuration updated successfully', 'updated_fields': updated})
 
 @bp.route('/api/clusters/<cluster_id>/config', methods=['PATCH'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def update_cluster_config_live(cluster_id):
     """Update cluster configuration without restart"""
     if cluster_id not in cluster_managers:
@@ -519,7 +519,7 @@ def get_excluded_nodes(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/excluded-nodes', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def set_excluded_nodes(cluster_id):
     """Set list of nodes excluded from balancing
     
@@ -575,7 +575,7 @@ def set_excluded_nodes(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/excluded-nodes/<node>', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def add_excluded_node(cluster_id, node):
     """Add a single node to the exclusion list"""
     ok, err = check_cluster_access(cluster_id)
@@ -615,7 +615,7 @@ def add_excluded_node(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/excluded-nodes/<node>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def remove_excluded_node(cluster_id, node):
     """Remove a node from the exclusion list"""
     ok, err = check_cluster_access(cluster_id)
@@ -718,7 +718,7 @@ def get_excluded_vms(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/excluded-vms/<int:vmid>', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def add_excluded_vm(cluster_id, vmid):
     """Add a VM to the exclusion list for load balancing"""
     ok, err = check_cluster_access(cluster_id)
@@ -745,7 +745,7 @@ def add_excluded_vm(cluster_id, vmid):
 
 
 @bp.route('/api/clusters/<cluster_id>/excluded-vms/<int:vmid>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def remove_excluded_vm(cluster_id, vmid):
     """Remove a VM from the exclusion list"""
     ok, err = check_cluster_access(cluster_id)
@@ -785,7 +785,7 @@ def get_excluded_pools(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/excluded-pools/<pool_name>', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def exclude_pool(cluster_id, pool_name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -801,7 +801,7 @@ def exclude_pool(cluster_id, pool_name):
 
 
 @bp.route('/api/clusters/<cluster_id>/excluded-pools/<pool_name>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def include_pool(cluster_id, pool_name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -834,7 +834,7 @@ def get_fallback_hosts(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/fallback-hosts', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def set_fallback_hosts(cluster_id):
     """Set list of fallback hosts for HA
     
@@ -966,7 +966,7 @@ def get_ha_status_detailed(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/ha/enable', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['ha.config'])
+@require_auth(perms=['ha.config'])
 def enable_ha(cluster_id):
     if cluster_id not in cluster_managers:
         return jsonify({'error': 'Cluster not found'}), 404
@@ -986,7 +986,7 @@ def enable_ha(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/ha/disable', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['ha.config'])
+@require_auth(perms=['ha.config'])
 def disable_ha(cluster_id):
     if cluster_id not in cluster_managers:
         return jsonify({'error': 'Cluster not found'}), 404
@@ -1006,7 +1006,7 @@ def disable_ha(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/ha/config', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ha.config'])
 def update_ha_config(cluster_id):
     """Update HA configuration including split-brain prevention settings"""
     if cluster_id not in cluster_managers:
@@ -1164,7 +1164,7 @@ def _save_ha_config_to_db(cluster_id: str, manager):
 
 
 @bp.route('/api/clusters/<cluster_id>/ha/install-self-fence', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ha.config'])
 def install_self_fence_agent(cluster_id):
     """Install self-fence agent on all cluster nodes"""
     if cluster_id not in cluster_managers:
@@ -1203,7 +1203,7 @@ def install_self_fence_agent(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/ha/uninstall-self-fence', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ha.config'])
 def uninstall_self_fence_agent(cluster_id):
     """Uninstall self-fence agent from all cluster nodes"""
     if cluster_id not in cluster_managers:
@@ -1303,7 +1303,7 @@ def get_proxmox_ha_groups(cluster_id):
 
 # MK: Create HA Group
 @bp.route('/api/clusters/<cluster_id>/proxmox-ha/groups', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['ha.config'])
+@require_auth(perms=['ha.config'])
 def create_proxmox_ha_group(cluster_id):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1348,7 +1348,7 @@ def create_proxmox_ha_group(cluster_id):
 
 # MK: Delete HA Group
 @bp.route('/api/clusters/<cluster_id>/proxmox-ha/groups/<group_name>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN], perms=['ha.config'])
+@require_auth(perms=['ha.config'])
 def delete_proxmox_ha_group(cluster_id, group_name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1374,7 +1374,7 @@ def delete_proxmox_ha_group(cluster_id, group_name):
 
 
 @bp.route('/api/clusters/<cluster_id>/proxmox-ha/resources', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['ha.config'])
+@require_auth(perms=['ha.config'])
 def add_to_proxmox_ha(cluster_id):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1471,7 +1471,7 @@ def remove_from_proxmox_ha_by_sid(cluster_id, sid):
 
 # LW: Mar 2026 - manual balance trigger (#149)
 @bp.route('/api/clusters/<cluster_id>/balance-now', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN], perms=['cluster.config'])
+@require_auth(perms=['cluster.config'])
 def trigger_balance_now(cluster_id):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err

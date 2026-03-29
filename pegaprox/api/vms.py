@@ -569,7 +569,7 @@ def get_datastore_content(cluster_id, storage_name):
 
 
 @bp.route('/api/clusters/<cluster_id>/datastores/<storage_name>/content/<path:volid>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.delete'])
 def delete_datastore_content(cluster_id, storage_name, volid):
     """Delete content from a datastore (ISO, backup, etc.)"""
     ok, err = check_cluster_access(cluster_id)
@@ -669,7 +669,7 @@ def delete_datastore_content(cluster_id, storage_name, volid):
 
 
 @bp.route('/api/clusters/<cluster_id>/datastores/<storage_name>/upload', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.upload'])
 def upload_to_datastore(cluster_id, storage_name):
     """Upload ISO or other content to a datastore"""
     ok, err = check_cluster_access(cluster_id)
@@ -725,7 +725,9 @@ def upload_to_datastore(cluster_id, storage_name):
             return jsonify({'error': 'No file selected'}), 400
 
         # MK: Mar 2026 - allow disk images alongside ISOs (#115)
-        filename = file.filename
+        filename = os.path.basename(file.filename)  # strip directory components
+        if not filename or filename.startswith('.') or '/' in filename or '\\' in filename:
+            return jsonify({'error': 'Invalid filename'}), 400
         _allowed_ext = {
             'iso': ('.iso',),
             'import': ('.vmdk', '.qcow2', '.img', '.raw'),
@@ -734,11 +736,18 @@ def upload_to_datastore(cluster_id, storage_name):
         allowed = _allowed_ext.get(content_type)
         if allowed and not filename.lower().endswith(allowed):
             return jsonify({'error': f'Invalid file type. Allowed: {", ".join(allowed)}'}), 400
+        # NS: reject filenames with null bytes or shell metacharacters
+        if any(c in filename for c in '\x00;|&$`'):
+            return jsonify({'error': 'Invalid characters in filename'}), 400
 
         # NS: Mar 2026 - save to temp file first, SpooledTemporaryFile + requests is unreliable
         # across werkzeug versions. Temp file is cleaned up in finally block.
+        # #119: use app dir for temp, not /tmp (LXC tmpfs is often too small for ISOs)
         import tempfile
-        fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(filename)[1])
+        upload_tmp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tmp')
+        os.makedirs(upload_tmp_dir, mode=0o700, exist_ok=True)
+        # don't include user extension in temp filename
+        fd, tmp_path = tempfile.mkstemp(dir=upload_tmp_dir)
         try:
             file.save(tmp_path)
         except Exception as e:
@@ -794,7 +803,7 @@ def upload_to_datastore(cluster_id, storage_name):
 _url_downloads = {}  # task_id -> { status, percent, message, ... }
 
 @bp.route('/api/clusters/<cluster_id>/datastores/<storage_name>/download-url', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.upload'])
 def download_iso_from_url(cluster_id, storage_name):
     """Download ISO/image from URL to storage (like Proxmox)"""
     ok, err = check_cluster_access(cluster_id)
@@ -983,7 +992,7 @@ def download_iso_from_url(cluster_id, storage_name):
 
 
 @bp.route('/api/clusters/<cluster_id>/datastores/<storage_name>/download-status/<task_id>', methods=['GET'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.upload'])
 def get_download_status(cluster_id, storage_name, task_id):
     """Get status of URL download task"""
     ok, err = check_cluster_access(cluster_id)
@@ -3007,7 +3016,7 @@ def vm_action_api(cluster_id, node, vm_type, vmid, action):
         result = manager.vm_action(node, vmid, vm_type, action, force=force)
     except Exception as e:
         logging.error(f"[VM-ACTION] Unhandled error: {action} on {vm_type}/{vmid}: {e}", exc_info=True)
-        return jsonify({'error': f'{action} failed: {str(e)}'}), 500
+        return jsonify({'error': f'{action} failed'}), 500
 
     if result['success']:
         # Audit log
@@ -3097,18 +3106,36 @@ def clone_vm_api(cluster_id, node, vm_type, vmid):
     )
     
     if result['success']:
+        # #194: apply Cloud-Init config to cloned QEMU VM (before first boot)
+        if vm_type == 'qemu':
+            ci_params = {}
+            for ci_key in ('ciuser', 'cipassword', 'sshkeys', 'ipconfig0', 'ipconfig1', 'nameserver', 'searchdomain'):
+                if data.get(ci_key):
+                    ci_params[ci_key] = data[ci_key]
+            if ci_params:
+                try:
+                    upid = result.get('data')
+                    if upid:
+                        manager._wait_for_task(node, upid, timeout=600)
+                    clone_node = data.get('target_node') or node
+                    ci_url = f"https://{manager.host}:8006/api2/json/nodes/{clone_node}/qemu/{newid}/config"
+                    manager._api_post(ci_url, data=ci_params)
+                    logging.info(f"[CLONE] Applied Cloud-Init config to VM {newid}: {list(ci_params.keys())}")
+                except Exception as e:
+                    logging.warning(f"[CLONE] Cloud-Init config failed for {newid}: {e}")
+
         # Audit log
         user = getattr(request, 'session', {}).get('user', 'system')
         log_audit(user, 'vm.cloned', f"{vm_type.upper()} {vmid} cloned to {newid}" + (f" as '{data.get('name')}'" if data.get('name') else ""), cluster=manager.config.name)
-        
+
         # NS: Register PegaProx user for this task
         upid = result.get('data')
         if upid:
             register_task_user(upid, user, cluster_id)
-        
+
         # NS: Push immediate update for live UI
         push_immediate_update(cluster_id, delay=0.5)
-        
+
         return jsonify({
             'message': f'Clone gestartet: {vmid} -> {newid}',
             'newid': newid,
@@ -3238,7 +3265,7 @@ def get_vm_lock_status_api(cluster_id, node, vm_type, vmid):
 
 
 @bp.route('/api/clusters/<cluster_id>/vms/<node>/<vm_type>/<int:vmid>/unlock', methods=['POST'])
-@require_auth(perms=['vm.power'])
+@require_auth(perms=['vm.config'])
 def unlock_vm_api(cluster_id, node, vm_type, vmid):
     """Unlock a VM/CT - use with caution!"""
     ok, err = check_cluster_access(cluster_id)
@@ -4937,7 +4964,30 @@ def _execute_replication(job):
 
         logging.info(f"[XCREPL] Job {job_id}: clone {clone_vmid} created from snapshot")
 
-        # 5. remote-migrate clone to target cluster
+        # 5. build storage mapping from clone's actual disks -> target storage
+        # NS Mar 2026: PVE remote_migrate needs "source_stor:target_stor" format
+        # when source and target storage names differ (#192)
+        storage_mapping = target_storage  # fallback: plain name
+        try:
+            cfg_url = f"https://{source_mgr.host}:8006/api2/json/nodes/{source_node}/{vm_type}/{clone_vmid}/config"
+            cfg_resp = source_mgr._api_get(cfg_url)
+            if cfg_resp.status_code == 200:
+                clone_cfg = cfg_resp.json().get('data', {})
+                source_storages = set()
+                for k, v in clone_cfg.items():
+                    if k.startswith(('scsi', 'virtio', 'ide', 'sata', 'rootfs', 'mp')) and isinstance(v, str) and ':' in v:
+                        stor = v.split(':')[0]
+                        if stor and stor != 'none':
+                            source_storages.add(stor)
+                if source_storages:
+                    # map each source storage to the target
+                    mappings = [f"{s}:{target_storage}" for s in source_storages]
+                    storage_mapping = ','.join(mappings)
+                    logging.info(f"[XCREPL] Job {job_id}: storage mapping: {storage_mapping}")
+        except Exception as e:
+            logging.warning(f"[XCREPL] Job {job_id}: could not build storage mapping, using plain: {e}")
+
+        # remote-migrate clone to target cluster
         # same token/fingerprint flow as cross_cluster_lb.py
         token_name = f"xcrepl-{job_id}-{int(time.time()) % 100000}"
         token = target_mgr.create_api_token(token_name)
@@ -4962,7 +5012,7 @@ def _execute_replication(job):
             # migrate the clone (offline, delete source clone after)
             result = source_mgr.remote_migrate_vm(
                 node=source_node, vmid=clone_vmid, vm_type=vm_type,
-                target_endpoint=endpoint, target_storage=target_storage,
+                target_endpoint=endpoint, target_storage=storage_mapping,
                 target_bridge=target_bridge, target_vmid=vmid,
                 online=False, delete_source=True,
             )
@@ -5028,7 +5078,8 @@ def _wait_for_task(mgr, task_upid, timeout=600, poll=5):
                 if t and t.get('upid') == task_upid:
                     st = t.get('status', '')
                     if st and st != 'running':
-                        return st == 'OK'
+                        # NS: WARNINGS is still a success (PVE reports non-fatal issues)
+                        return st in ('OK', 'WARNINGS')
                     break
         except Exception:
             pass
@@ -6793,7 +6844,7 @@ def migrate_vm_api(cluster_id, node, vm_type, vmid):
             return jsonify(result), 400
     except Exception as e:
         logging.error(f"[MIGRATE] Unhandled error migrating {vm_type}/{vmid}: {e}", exc_info=True)
-        return jsonify({'error': f'Migration failed: {str(e)}'}), 500
+        return jsonify({'error': 'Migration failed'}), 500
 
 
 @bp.route('/api/clusters/<cluster_id>/vms/<node>/<vm_type>/<int:vmid>', methods=['DELETE'])

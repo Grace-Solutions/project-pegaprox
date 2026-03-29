@@ -78,10 +78,10 @@ def create_pool(cluster_id):
         
         return jsonify({'success': True, 'poolid': poolid, 'message': f'Pool "{poolid}" created successfully'})
     except Exception as e:
-        error_msg = str(e)
-        if 'already exists' in error_msg.lower():
+        if 'already exists' in str(e).lower():
             return jsonify({'error': f'Pool "{poolid}" already exists'}), 409
-        return jsonify({'error': f'Failed to create pool: {error_msg}'}), 500
+        logging.error(f"[API] Failed to create pool: {e}")
+        return jsonify({'error': 'Failed to create pool'}), 500
 
 
 @bp.route('/api/clusters/<cluster_id>/pools/<pool_id>', methods=['PUT'])
@@ -115,7 +115,8 @@ def update_pool(cluster_id, pool_id):
         
         return jsonify({'success': True, 'message': f'Pool "{pool_id}" updated successfully'})
     except Exception as e:
-        return jsonify({'error': f'Failed to update pool: {str(e)}'}), 500
+        logging.error(f"[API] Failed to update pool: {e}")
+        return jsonify({'error': 'Failed to update pool'}), 500
 
 
 @bp.route('/api/clusters/<cluster_id>/pools/<pool_id>', methods=['DELETE'])
@@ -229,7 +230,8 @@ def add_pool_member(cluster_id, pool_id):
         
         return jsonify({'success': True, 'message': f'VM {vmid} added to pool "{pool_id}"'})
     except Exception as e:
-        return jsonify({'error': f'Failed to add VM to pool: {str(e)}'}), 500
+        logging.error(f"[API] Failed to add VM to pool: {e}")
+        return jsonify({'error': 'Failed to add VM to pool'}), 500
 
 
 @bp.route('/api/clusters/<cluster_id>/pools/<pool_id>/members/<int:vmid>', methods=['DELETE'])
@@ -268,7 +270,8 @@ def remove_pool_member(cluster_id, pool_id, vmid):
         
         return jsonify({'success': True, 'message': f'VM {vmid} removed from pool "{pool_id}"'})
     except Exception as e:
-        return jsonify({'error': f'Failed to remove VM from pool: {str(e)}'}), 500
+        logging.error(f"[API] Failed to remove VM from pool: {e}")
+        return jsonify({'error': 'Failed to remove VM from pool'}), 500
 
 
 @bp.route('/api/clusters/<cluster_id>/vms-without-pool', methods=['GET'])

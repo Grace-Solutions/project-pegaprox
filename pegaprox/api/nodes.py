@@ -1817,7 +1817,7 @@ def get_pool_ha_api(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/ha/enable', methods=['POST'])
-@require_auth(perms=['cluster.manage'])
+@require_auth(perms=['ha.config'])
 def enable_pool_ha_api(cluster_id):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1837,7 +1837,7 @@ def enable_pool_ha_api(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/ha/disable', methods=['POST'])
-@require_auth(perms=['cluster.manage'])
+@require_auth(perms=['ha.config'])
 def disable_pool_ha_api(cluster_id):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err

@@ -613,12 +613,24 @@
             const snapshotNodes = useRef(null);
             const snapshotResources = useRef(null);
             const snapshotPbs = useRef(null);
+            const snapshotMultiCluster = useRef(null);
+            const [topoRevision, setTopoRevision] = useState(0); // bump to force refresh
             if (!snapshotNodes.current && nodes) snapshotNodes.current = nodes;
             if (!snapshotResources.current && resources) snapshotResources.current = resources;
             if (!snapshotPbs.current && pbsServers) snapshotPbs.current = pbsServers;
+            if (!snapshotMultiCluster.current && multiCluster?.length) snapshotMultiCluster.current = multiCluster;
             const frozenNodes = snapshotNodes.current || nodes || [];
             const frozenResources = snapshotResources.current || resources || [];
             const frozenPbs = snapshotPbs.current || pbsServers || [];
+            const frozenMultiCluster = snapshotMultiCluster.current || multiCluster;
+            // refresh handler — re-snapshot from live props
+            const refreshTopology = useCallback(() => {
+                snapshotNodes.current = nodes;
+                snapshotResources.current = resources;
+                snapshotPbs.current = pbsServers;
+                if (multiCluster?.length) snapshotMultiCluster.current = multiCluster;
+                setTopoRevision(r => r + 1);
+            }, [nodes, resources, pbsServers, multiCluster]);
 
             // NS: view mode toggle - default to diagram, cards as fallback
             const [viewMode, setViewMode] = useState('diagram');
@@ -664,7 +676,8 @@
             const offlineNodes = frozenNodes.filter(n => n.status === 'offline' || (n.cpu === undefined && n.cpu_percent === undefined && n.status !== 'online'));
             const allNodes = [...activeNodes, ...offlineNodes];
 
-            const connectedPbs = frozenPbs.filter(p => p.status !== 'disconnected');
+            // NS: only show PBS linked to this cluster (or with no linked_clusters set = show everywhere)
+            const connectedPbs = frozenPbs.filter(p => p.status !== 'disconnected' && (!p.linked_clusters?.length || p.linked_clusters.includes(clusterId)));
             const totalGuests = frozenResources.filter(r => r.type === 'qemu' || r.type === 'lxc').length;
 
             // ── card view helpers ──
@@ -993,11 +1006,11 @@
             };
 
             // ── multi-cluster layout (when multiCluster prop given) ──
-            const isMultiCluster = multiCluster && multiCluster.length > 0;
+            const isMultiCluster = frozenMultiCluster && frozenMultiCluster.length > 0;
             const MC_TIER = { brand: 30, clusters: 100, nodes: 260, vmsStart: 420 };
             const mcLayout = React.useMemo(() => {
                 if (!isMultiCluster) return null;
-                const layouts = multiCluster.map(cl => {
+                const layouts = frozenMultiCluster.map(cl => {
                     const clNodes = cl.nodes || [];
                     const clRes = (cl.resources || []).filter(r => r.type === 'qemu' || r.type === 'lxc');
                     const nodeGrp = {};
@@ -1050,7 +1063,7 @@
                 });
                 const mcH = Math.max(520, mcMaxBottom + 60);
                 return { layouts, mcW, mcH };
-            }, [isMultiCluster, multiCluster, colSpacing]);
+            }, [isMultiCluster, frozenMultiCluster, colSpacing, topoRevision]);
 
             // viewBox for pan/zoom — use multi-cluster dimensions when applicable
             const effSvgW = isMultiCluster && mcLayout ? mcLayout.mcW : svgW;
@@ -1100,6 +1113,10 @@
                                     <button onClick={resetView}
                                         className="p-1 text-gray-400 hover:text-white" title="Fit">
                                         <Icons.Maximize />
+                                    </button>
+                                    <button onClick={refreshTopology}
+                                        className="p-1 text-gray-400 hover:text-white" title={t('refreshData') || 'Refresh'}>
+                                        <Icons.RefreshCw />
                                     </button>
                                     <div className="w-px h-4 bg-gray-700 mx-2" />
                                     <button onClick={() => exportDiagram('png')}
@@ -1259,7 +1276,7 @@
                                                                         fill={vm.status === 'running' ? '#60b515' : '#728b9a'} />
                                                                     <text y={22} textAnchor="middle" fill="#e9ecef" fontSize="10">
                                                                         <title>{vm.name || `${vm.type === 'qemu' ? 'VM' : 'CT'} ${vm.vmid}`}</title>
-                                                                        {(vm.name || `${vm.type === 'qemu' ? 'VM' : 'CT'} ${vm.vmid}`).substring(0, 16)}{(vm.name || '').length > 16 ? '…' : ''}
+                                                                        {(vm.name || `${vm.type === 'qemu' ? 'VM' : 'CT'} ${vm.vmid}`).substring(0, 24)}{(vm.name || '').length > 24 ? '…' : ''}
                                                                     </text>
                                                                     <text y={33} textAnchor="middle" fill="#728b9a" fontSize="9">{vm.vmid}</text>
                                                                 </g>
@@ -1394,7 +1411,7 @@
                                             fill={vm.status === 'running' ? '#60b515' : '#728b9a'} />
                                         <text y={22} textAnchor="middle" fill="#e9ecef" fontSize="10">
                                             <title>{vm.name || `${vm.type === 'qemu' ? 'VM' : 'CT'} ${vm.vmid}`}</title>
-                                            {(vm.name || `${vm.type === 'qemu' ? 'VM' : 'CT'} ${vm.vmid}`).substring(0, 16)}{(vm.name || '').length > 16 ? '…' : ''}
+                                            {(vm.name || `${vm.type === 'qemu' ? 'VM' : 'CT'} ${vm.vmid}`).substring(0, 24)}{(vm.name || '').length > 24 ? '…' : ''}
                                         </text>
                                         <text y={33} textAnchor="middle" fill="#728b9a" fontSize="9">{vm.vmid}</text>
                                     </g>
@@ -1428,7 +1445,7 @@
                             {tooltip && (
                                 <div style={{
                                     position: 'absolute', left: tooltip.x, top: tooltip.y,
-                                    background: 'rgba(20,25,35,0.95)', border: '1px solid rgba(255,255,255,0.15)',
+                                    background: 'var(--corp-surface-3, rgba(20,25,35,0.95))', border: '1px solid var(--corp-border-medium, rgba(255,255,255,0.15))',
                                     borderRadius: '6px', padding: '8px 12px', pointerEvents: 'none',
                                     zIndex: 50, minWidth: '100px', backdropFilter: 'blur(8px)'
                                 }}>
@@ -1764,10 +1781,13 @@
                 if (r && r.ok) { addToast(t('createPlan') + ' OK'); setShowCreateModal(false); setCreateForm({ name: '', source_cluster: '', target_cluster: '' }); fetchPlans(); }
                 else { const e = r ? await r.json().catch(() => ({})) : {}; addToast(e.error || 'Failed', 'error'); }
             };
-            const handleDeletePlan = async (planId) => {
-                if (!confirm(t('deletePlan') + '?')) return;
-                const r = await authFetch(`${API_URL}/site-recovery/plans/${planId}`, { method: 'DELETE' });
-                if (r && r.ok) { addToast('Plan deleted'); setSelectedPlan(null); fetchPlans(); } else addToast('Delete failed', 'error');
+            const handleDeletePlan = async (planId, force) => {
+                const msg = force ? (t('forceDeletePlan') || 'Force-delete this stuck plan?') : (t('deletePlan') + '?');
+                if (!confirm(msg)) return;
+                const url = force ? `${API_URL}/site-recovery/plans/${planId}?force=1` : `${API_URL}/site-recovery/plans/${planId}`;
+                const r = await authFetch(url, { method: 'DELETE' });
+                if (r && r.ok) { addToast('Plan deleted'); setSelectedPlan(null); fetchPlans(); }
+                else { const e = r ? await r.json().catch(() => ({})) : {}; addToast(e.error || 'Delete failed', 'error'); }
             };
             const handleAction = async (planId, action, confirmMsg) => {
                 if (confirmMsg && !confirm(confirmMsg)) return;
@@ -2024,7 +2044,9 @@
                                 </div>
                                 {canManage && <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
                                     <h4 className="text-sm font-medium text-red-400 mb-2">{t('dangerZone') || 'Danger Zone'}</h4>
-                                    <button onClick={() => handleDeletePlan(pd.id)} className="px-3 py-1.5 text-xs rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30">{t('deletePlan')}</button>
+                                    <button onClick={() => handleDeletePlan(pd.id, pd.status === 'running' || pd.status === 'testing')} className="px-3 py-1.5 text-xs rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30">
+                                        {(pd.status === 'running' || pd.status === 'testing') ? (t('forceDeletePlan') || 'Force Delete (stuck)') : t('deletePlan')}
+                                    </button>
                                 </div>}
                             </div>
                         )}
@@ -2098,7 +2120,7 @@
                                 <div key={plan.id} onClick={() => setSelectedPlan(plan.id)} className="bg-proxmox-card border border-proxmox-border rounded-xl p-4 cursor-pointer hover:border-proxmox-orange/50 transition-colors">
                                     <div className="flex items-center justify-between mb-3"><h3 className="font-medium text-sm">{plan.name}</h3><span className={`px-2 py-0.5 rounded-full text-xs ${statusColors[plan.status] || 'bg-gray-500/20 text-gray-400'}`}>{plan.status}</span></div>
                                     <div className="text-xs text-gray-500 space-y-1"><p>{getClusterName(plan.source_cluster)} → {getClusterName(plan.target_cluster)}</p><p>{plan.vm_count} {t('protectedVMs')}</p>{plan.last_failover && <p>Last failover: {new Date(plan.last_failover).toLocaleString()}</p>}</div>
-                                    {canManage && <div className="mt-3 flex justify-end"><button onClick={(e) => { e.stopPropagation(); handleDeletePlan(plan.id); }} className="text-red-400 hover:text-red-300 text-xs"><Icons.Trash2 className="w-3.5 h-3.5" /></button></div>}
+                                    {canManage && <div className="mt-3 flex justify-end"><button onClick={(e) => { e.stopPropagation(); handleDeletePlan(plan.id, plan.status === 'running' || plan.status === 'testing'); }} className="text-red-400 hover:text-red-300 text-xs"><Icons.Trash2 className="w-3.5 h-3.5" /></button></div>}
                                 </div>
                             ))}
                         </div>
@@ -2137,6 +2159,8 @@
             const [knownNodes, setKnownNodes] = useState({}); // NS: Track all nodes ever seen to show offline ones
             const [clusterResources, setClusterResources] = useState([]);
             const [clusterDatastores, setClusterDatastores] = useState({ shared: [], local: {} }); // LW: Mar 2026 - sidebar datastore list
+            const [clusterNetworks, setClusterNetworks] = useState([]); // NS: Mar 2026 - network view
+            const [loadingNetworks, setLoadingNetworks] = useState(false);
             const [lastUpdate, setLastUpdate] = useState(null);
             const [migrationLogs, setMigrationLogs] = useState([]);
             const [nodeAlerts, setNodeAlerts] = useState({}); // Track node offline/online alerts
@@ -2233,7 +2257,7 @@
             const [showVmwareMigrate, setShowVmwareMigrate] = useState(false);
             const [vmwareMigrationPlan, setVmwareMigrationPlan] = useState(null);
             const [vmwareMigrations, setVmwareMigrations] = useState([]);
-            const [vmwareMigrateForm, setVmwareMigrateForm] = useState({target_cluster:'',target_node:'',target_storage:'',esxi_password:'',network_bridge:'vmbr0',start_after:true,remove_source:false,transfer_mode:'auto'});
+            const [vmwareMigrateForm, setVmwareMigrateForm] = useState({target_cluster:'',target_node:'',target_storage:'',esxi_password:'',network_bridge:'vmbr0',start_after:true,remove_source:false,transfer_mode:'auto',bios:'auto',preserve_mac:true});
             const [vmwareMigrateLoading, setVmwareMigrateLoading] = useState(false);
             const [vmwareConsoleUrl, setVmwareConsoleUrl] = useState(null);
             const [showVmwareConsole, setShowVmwareConsole] = useState(false);
@@ -2316,6 +2340,8 @@
             const [expandedSidebarPools, setExpandedSidebarPools] = useState({});
             const [clusterPools, setClusterPools] = useState([]);
             const [selectedSidebarDatastore, setSelectedSidebarDatastore] = useState(null); // LW: datastore click in sidebar
+            const [selectedSidebarNetwork, setSelectedSidebarNetwork] = useState(null);
+            const [expandedSidebarNets, setExpandedSidebarNets] = useState({});
             const [inlinePoolCreate, setInlinePoolCreate] = useState(null);
             const [inlinePoolEdit, setInlinePoolEdit] = useState(null); // MK: {clusterId, poolid, comment}
             // NS: hover tooltip for sidebar items
@@ -3049,7 +3075,7 @@
                             <span className="truncate flex-1" style={{opacity: isActive ? 1 : 0.5}}>{store.storage}</span>
                             {isActive && store.total > 0 && (
                                 <span className="flex items-center gap-1 ml-auto flex-shrink-0">
-                                    <span className="w-12 h-1 rounded-full overflow-hidden" style={{background: '#1a2e38'}}>
+                                    <span className="w-12 h-1 rounded-full overflow-hidden" style={{background: 'var(--corp-bar-track, #1a2e38)'}}>
                                         <span className="block h-full rounded-full" style={{width: `${pct}%`, background: barColor}} />
                                     </span>
                                     <span className="text-[10px]" style={{color: '#728b9a'}}>{pct}%</span>
@@ -3091,6 +3117,179 @@
                                 </React.Fragment>
                             );
                         })}
+                    </div>
+                );
+            };
+
+            // NS: Mar 2026 - network view for corporate sidebar
+            const renderNetworkTree = (clusterId) => {
+                if (!isCorporate || !expandedSidebarClusters[clusterId]) return null;
+
+                const isSelected = selectedCluster && selectedCluster.id === clusterId;
+                const nets = isSelected ? clusterNetworks : (sidebarClusterData[clusterId]?.networks || []);
+
+                if (loadingSidebarClusters[clusterId] || (isSelected && loadingNetworks)) {
+                    return (
+                        <div className="ml-5 py-2 flex items-center gap-2 text-[12px]" style={{color: 'var(--corp-text-muted)'}}>
+                            <Icons.Loader className="w-4 h-4 animate-spin" />
+                            <span>{t('loading')}...</span>
+                        </div>
+                    );
+                }
+
+                if (!nets || nets.length === 0) {
+                    return (
+                        <div className="ml-5 py-1 text-[12px]" style={{color: '#728b9a', fontStyle: 'italic'}}>
+                            {t('noNetworks') || 'No networks'}
+                        </div>
+                    );
+                }
+
+                // group: SDN vnets vs regular bridges
+                const sdnNets = nets.filter(n => n.type === 'sdn_vnet' || n.name?.startsWith('vnet'));
+                const regularNets = nets.filter(n => !sdnNets.includes(n));
+
+                const renderNetItem = (net) => {
+                    const isNetSelected = selectedSidebarNetwork?.name === net.name && selectedSidebarNetwork?.clusterId === clusterId;
+                    const vmCount = (net.vms || []).length;
+                    const isExpanded = expandedSidebarNets[`${clusterId}:${net.name}`];
+                    const isSdn = sdnNets.includes(net);
+                    // filter search
+                    const search = sidebarSearch.toLowerCase();
+                    if (search) {
+                        const nameMatch = net.name?.toLowerCase().includes(search);
+                        const vmMatch = net.vms?.some(v => v.name?.toLowerCase().includes(search) || String(v.vmid).includes(search));
+                        if (!nameMatch && !vmMatch) return null;
+                    }
+                    // group VMs by node — same bridge name on different nodes are separate physical bridges
+                    const vmsByNode = {};
+                    (net.vms || []).forEach(vm => {
+                        const n = vm.node || 'unknown';
+                        if (!vmsByNode[n]) vmsByNode[n] = [];
+                        vmsByNode[n].push(vm);
+                    });
+                    const nodeNames = Object.keys(vmsByNode).sort();
+                    // also include nodes that have the bridge but no VMs on it
+                    (net.nodes || []).forEach(n => { if (!vmsByNode[n]) vmsByNode[n] = []; });
+                    const allNodes = [...new Set([...nodeNames, ...(net.nodes || [])])].sort();
+                    const multiNode = allNodes.length > 1;
+
+                    return (
+                        <React.Fragment key={`net-${clusterId}-${net.name}`}>
+                            <div
+                                tabIndex={0}
+                                onClick={() => {
+                                    setExpandedSidebarNets(prev => ({ ...prev, [`${clusterId}:${net.name}`]: !prev[`${clusterId}:${net.name}`] }));
+                                    if (!selectedCluster || selectedCluster.id !== clusterId) setSelectedCluster(clusters.find(c => c.id === clusterId));
+                                    setSelectedSidebarNetwork({ name: net.name, clusterId });
+                                    setSelectedSidebarVm(null); setSelectedSidebarNode(null); setSelectedSidebarDatastore(null);
+                                }}
+                                className="corp-tree-child flex items-center gap-1.5 pl-1 pr-2 py-0.5 text-[13px] leading-5 cursor-pointer"
+                                style={isNetSelected ? {background: 'rgba(73,175,217,0.10)', borderLeft: '2px solid #49afd9', color: '#e9ecef'} : {color: net.active ? '#adbbc4' : '#728b9a'}}
+                                onMouseEnter={(e) => { if (!isNetSelected) { e.currentTarget.style.background = '#29414e'; e.currentTarget.style.color = '#e9ecef'; }}}
+                                onMouseLeave={(e) => { if (!isNetSelected) { e.currentTarget.style.background = ''; e.currentTarget.style.color = net.active ? '#adbbc4' : '#728b9a'; }}}
+                            >
+                                <span className="w-3 h-3 flex items-center justify-center flex-shrink-0 text-[9px]" style={{color: '#728b9a'}}>
+                                    {isExpanded ? '▾' : '▸'}
+                                </span>
+                                <Icons.Network className="w-3.5 h-3.5 flex-shrink-0" style={{color: isSdn ? '#a78bfa' : net.active ? '#49afd9' : '#728b9a'}} />
+                                <span className="truncate flex-1" style={{opacity: net.active ? 1 : 0.5}}>{net.name}</span>
+                                <span className="flex items-center gap-1.5 ml-auto flex-shrink-0">
+                                    {net.cidr && <span className="text-[10px]" style={{color: '#5a7a8a'}}>{net.cidr}</span>}
+                                    {allNodes.length > 0 && (
+                                        <span className="text-[10px] px-1 rounded" style={{background: '#1a2e38', color: '#5a7a8a'}}>{allNodes.length}N</span>
+                                    )}
+                                    {vmCount > 0 && (
+                                        <span className="text-[10px] px-1 rounded" style={{background: '#1a2e38', color: '#49afd9'}}>{vmCount}</span>
+                                    )}
+                                </span>
+                            </div>
+                            {isExpanded && (
+                                <div className="ml-4">
+                                    {allNodes.map(nodeName => {
+                                        const nodeVms = vmsByNode[nodeName] || [];
+                                        const nodeKey = `${clusterId}:${net.name}:${nodeName}`;
+                                        const isNodeExpanded = expandedSidebarNets[nodeKey] !== false; // default open
+                                        return (
+                                            <React.Fragment key={nodeKey}>
+                                                {multiNode && (
+                                                    <div
+                                                        className="flex items-center gap-1.5 pl-1 py-0.5 text-[12px] cursor-pointer"
+                                                        style={{color: '#6a8a9a'}}
+                                                        onClick={(e) => { e.stopPropagation(); setExpandedSidebarNets(prev => ({ ...prev, [nodeKey]: prev[nodeKey] === false ? true : false })); }}
+                                                        onMouseEnter={(e) => { e.currentTarget.style.color = '#adbbc4'; }}
+                                                        onMouseLeave={(e) => { e.currentTarget.style.color = '#6a8a9a'; }}
+                                                    >
+                                                        <span className="text-[9px]">{isNodeExpanded ? '▾' : '▸'}</span>
+                                                        <Icons.Server className="w-3 h-3 flex-shrink-0" />
+                                                        <span className="truncate">{nodeName}</span>
+                                                        {nodeVms.length > 0 && <span className="text-[10px] ml-auto" style={{color: '#3d5a6a'}}>{nodeVms.length}</span>}
+                                                    </div>
+                                                )}
+                                                {(multiNode ? isNodeExpanded : true) && nodeVms.map((vm, i) => {
+                                                    const isRunning = vm.status === 'running';
+                                                    const isVmSelected = selectedSidebarVm?.vmid === vm.vmid;
+                                                    return (
+                                                        <div
+                                                            key={`${net.name}-${nodeName}-${vm.vmid}-${i}`}
+                                                            tabIndex={0}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (!selectedCluster || selectedCluster.id !== clusterId) setSelectedCluster(clusters.find(c => c.id === clusterId));
+                                                                setSelectedSidebarVm({ vmid: vm.vmid, name: vm.name, node: vm.node, type: vm.type, status: vm.status });
+                                                                setSelectedSidebarNode(null); setSelectedSidebarDatastore(null); setSelectedSidebarNetwork(null);
+                                                                setActiveTab('resources');
+                                                            }}
+                                                            className={`corp-tree-child flex items-center gap-1.5 pr-2 py-0.5 text-[12px] leading-4 cursor-pointer ${multiNode ? 'pl-3' : 'pl-1'}`}
+                                                            style={isVmSelected ? {background: 'rgba(73,175,217,0.10)', borderLeft: '2px solid var(--corp-accent)', color: 'var(--color-text)'} : {color: 'var(--corp-text-secondary)'}}
+                                                            onMouseEnter={(e) => { if (!isVmSelected) { e.currentTarget.style.background = 'var(--color-hover)'; e.currentTarget.style.color = 'var(--color-text)'; }}}
+                                                            onMouseLeave={(e) => { if (!isVmSelected) { e.currentTarget.style.background = ''; e.currentTarget.style.color = 'var(--corp-text-secondary)'; }}}
+                                                        >
+                                                            <span className="relative flex-shrink-0" style={{width: '14px', height: '14px'}}>
+                                                                {vm.type === 'lxc'
+                                                                    ? <Icons.Box className="w-3.5 h-3.5" style={{color: isRunning ? 'var(--corp-accent)' : 'var(--corp-text-muted)'}} />
+                                                                    : <Icons.Monitor className="w-3.5 h-3.5" style={{color: isRunning ? 'var(--color-success)' : 'var(--corp-text-muted)'}} />
+                                                                }
+                                                                {isRunning && <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full" style={{background: vm.type === 'lxc' ? 'var(--corp-accent)' : 'var(--color-success)'}} />}
+                                                            </span>
+                                                            <span className="truncate">{vm.name || `${vm.type === 'lxc' ? 'CT' : 'VM'} ${vm.vmid}`}</span>
+                                                            <span className="text-[10px] ml-auto flex-shrink-0" style={{color: '#5a7a8a'}}>{vm.iface}</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </React.Fragment>
+                    );
+                };
+
+                return (
+                    <div className="ml-5 corp-inline-tree">
+                        {/* regular bridges first */}
+                        {regularNets.length > 0 && (
+                            <>
+                                <div className="flex items-center gap-1.5 pl-1 py-0.5 text-[11px] uppercase tracking-wider" style={{color: '#5a7a8a'}}>
+                                    <Icons.Network className="w-3 h-3" />
+                                    <span>{t('bridges') || 'Bridges'}</span>
+                                    <span style={{color: '#3d5a6a'}}>({regularNets.length})</span>
+                                </div>
+                                {regularNets.map(renderNetItem)}
+                            </>
+                        )}
+                        {/* SDN vnets */}
+                        {sdnNets.length > 0 && (
+                            <>
+                                <div className="flex items-center gap-1.5 pl-1 py-0.5 mt-1 text-[11px] uppercase tracking-wider" style={{color: '#5a7a8a'}}>
+                                    <Icons.Globe className="w-3 h-3" />
+                                    <span>SDN</span>
+                                    <span style={{color: '#3d5a6a'}}>({sdnNets.length})</span>
+                                </div>
+                                {sdnNets.map(renderNetItem)}
+                            </>
+                        )}
                     </div>
                 );
             };
@@ -5556,6 +5755,8 @@
                 setGlobalSnapshots([]);
                 setClusterPools(cached?.pools || []);
                 setClusterDatastores(cached?.datastores || { shared: [], local: {} });
+                setClusterNetworks(cached?.networks || []);
+                if (!cached?.networks?.length) setLoadingNetworks(true);
                 setResourcesSubTab('management');
                 setSnapshotFilterDate('');
                 setSnapshotSortBy('age');
@@ -5567,6 +5768,7 @@
                     fetchClusterResources(selectedCluster.id);
                     fetchClusterPools(selectedCluster.id);
                     fetchClusterDatastores(selectedCluster.id);
+                    fetchClusterNetworks(selectedCluster.id);
                     fetchMigrationLogs(selectedCluster.id);
                     fetchTasks(selectedCluster.id);
 
@@ -5779,17 +5981,19 @@
                 // NS: Mar 2026 - track loading so we can show a spinner in the tree
                 setLoadingSidebarClusters(prev => ({...prev, [clusterId]: true}));
                 try {
-                    const [metricsRes, resourcesRes, poolsRes, datastoresRes] = await Promise.all([
+                    const [metricsRes, resourcesRes, poolsRes, datastoresRes, networksRes] = await Promise.all([
                         authFetch(`${API_URL}/clusters/${clusterId}/metrics`),
                         authFetch(`${API_URL}/clusters/${clusterId}/resources`),
                         authFetch(`${API_URL}/clusters/${clusterId}/pools`),
-                        authFetch(`${API_URL}/clusters/${clusterId}/datastores`)
+                        authFetch(`${API_URL}/clusters/${clusterId}/datastores`),
+                        authFetch(`${API_URL}/clusters/${clusterId}/networks`)
                     ]);
                     const metrics = metricsRes && metricsRes.ok ? await metricsRes.json() : {};
                     const resources = resourcesRes && resourcesRes.ok ? await resourcesRes.json() : [];
                     const pools = poolsRes && poolsRes.ok ? await poolsRes.json() : [];
                     const datastores = datastoresRes && datastoresRes.ok ? await datastoresRes.json() : { shared: [], local: {} };
-                    setSidebarClusterData(prev => ({ ...prev, [clusterId]: { metrics, resources, pools, datastores } }));
+                    const netData = networksRes && networksRes.ok ? await networksRes.json() : { networks: [] };
+                    setSidebarClusterData(prev => ({ ...prev, [clusterId]: { metrics, resources, pools, datastores, networks: netData.networks || [] } }));
                 } catch (e) { console.error('sidebar fetch:', e); }
                 finally { setLoadingSidebarClusters(prev => { const n = {...prev}; delete n[clusterId]; return n; }); }
             };
@@ -5817,6 +6021,21 @@
                         setClusterDatastores(dsData);
                     }
                 } catch (e) { /* not critical for sidebar */ }
+            };
+
+            const fetchClusterNetworks = async (clusterId) => {
+                setLoadingNetworks(true);
+                try {
+                    const res = await authFetch(`${API_URL}/clusters/${clusterId}/networks`);
+                    if (res && res.ok) {
+                        const data = await res.json();
+                        const nets = data.networks || [];
+                        setSidebarClusterData(prev => ({ ...prev, [clusterId]: { ...(prev[clusterId] || {}), networks: nets } }));
+                        if (selectedClusterRef.current?.id !== clusterId) return;
+                        setClusterNetworks(nets);
+                    }
+                } catch (e) { /* network fetch optional */ }
+                finally { setLoadingNetworks(false); }
             };
 
             // LW: Feb 2026 - toggle sidebar cluster expansion
@@ -6792,7 +7011,7 @@
                                             {globalSearchLoading ? (
                                                 <Icons.RotateCw className="w-4 h-4 mr-3 text-gray-400 animate-spin flex-shrink-0" />
                                             ) : (
-                                                <kbd className="hidden md:inline-flex mr-3 px-1.5 py-0.5 text-xs text-gray-500 bg-proxmox-secondary rounded border border-proxmox-border flex-shrink-0">
+                                                <kbd className={`hidden md:inline-flex mr-3 px-1.5 py-0.5 text-xs rounded border flex-shrink-0 ${isCorporate ? 'text-[#5a7a8a] bg-[#1a2e38] border-[#344955]' : 'text-gray-500 bg-proxmox-dark border-proxmox-border'}`}>
                                                     {navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl+'}K
                                                 </kbd>
                                             )}
@@ -6802,7 +7021,7 @@
                                         {showGlobalSearch && globalSearchResults && (
                                             <>
                                                 <div className="fixed inset-0 z-40" onClick={() => setShowGlobalSearch(false)} />
-                                                <div className="absolute top-full right-0 md:left-0 mt-2 w-[28rem] max-h-[32rem] overflow-y-auto bg-proxmox-card border border-proxmox-border rounded-xl shadow-2xl z-50">
+                                                <div className={`absolute top-full right-0 md:left-0 mt-2 w-[28rem] max-h-[32rem] overflow-y-auto shadow-2xl z-50 ${isCorporate ? 'bg-[#1e3340] border border-[#344955] rounded-md' : 'bg-proxmox-card border border-proxmox-border rounded-xl'}`}>
                                                     {/* Header with count and prefix hints */}
                                                     <div className="p-3 border-b border-proxmox-border">
                                                         <div className="flex justify-between items-center">
@@ -7136,6 +7355,7 @@
                                                 { id: 'tree', icon: Icons.Server, label: t('treeView') || 'Hosts & VMs' },
                                                 { id: 'pools', icon: Icons.Folder, label: t('poolView') || 'Pools' },
                                                 { id: 'datastores', icon: Icons.Database, label: t('datastoreView') || 'Datastores' },
+                                                { id: 'networks', icon: Icons.Network, label: t('networkView') || 'Networks' },
                                             ].map(view => (
                                                 <button
                                                     key={view.id}
@@ -7380,7 +7600,7 @@
                                                                             toggleSidebarCluster={toggleSidebarCluster}
                                                                             onContextMenu={(type, target, pos) => setCtxMenu({type, target, position: pos})}
                                                                         />
-                                                                        {sidebarViewMode === 'datastores' ? renderDatastoreTree(cluster.id) : sidebarViewMode === 'pools' ? renderPoolTree(cluster.id) : renderInlineNodeTree(cluster.id)}
+                                                                        {sidebarViewMode === 'datastores' ? renderDatastoreTree(cluster.id) : sidebarViewMode === 'pools' ? renderPoolTree(cluster.id) : sidebarViewMode === 'networks' ? renderNetworkTree(cluster.id) : renderInlineNodeTree(cluster.id)}
                                                                         {expandedSidebarClusters[cluster.id] && <div className="h-px my-0.5" style={{background: 'var(--corp-border-subtle)', marginLeft: '20px'}} />}
                                                                     </React.Fragment>
                                                                 ))}
@@ -7426,7 +7646,7 @@
                                                                     toggleSidebarCluster={toggleSidebarCluster}
                                                                     onContextMenu={(type, target, pos) => setCtxMenu({type, target, position: pos})}
                                                                 />
-                                                                {sidebarViewMode === 'datastores' ? renderDatastoreTree(cluster.id) : sidebarViewMode === 'pools' ? renderPoolTree(cluster.id) : renderInlineNodeTree(cluster.id)}
+                                                                {sidebarViewMode === 'datastores' ? renderDatastoreTree(cluster.id) : sidebarViewMode === 'pools' ? renderPoolTree(cluster.id) : sidebarViewMode === 'networks' ? renderNetworkTree(cluster.id) : renderInlineNodeTree(cluster.id)}
                                                                         {expandedSidebarClusters[cluster.id] && <div className="h-px my-0.5" style={{background: 'var(--corp-border-subtle)', marginLeft: '20px'}} />}
                                                             </React.Fragment>
                                                         ))}
@@ -8503,7 +8723,7 @@
 
                                         {/* Datastore Tab */}
                                         {activeTab === 'datastore' && (
-                                            <DatastoreTab clusterId={selectedCluster.id} addToast={addToast} initialStorage={selectedSidebarDatastore?.name || null} initialNode={selectedSidebarDatastore?.node || null} />
+                                            <DatastoreTab clusterId={selectedCluster.id} addToast={addToast} initialStorage={selectedSidebarDatastore?.name || null} initialNode={selectedSidebarDatastore?.node || null} sharedDatastoreData={clusterDatastores} />
                                         )}
 
                                         {/* Automation Tab - NS Jan 2026 - Combines Schedules, Tags, Alerts, Affinity, Scripts */}
@@ -12066,6 +12286,38 @@
                                                                     <input value={vmwareMigrateForm.network_bridge} onChange={e => setVmwareMigrateForm({...vmwareMigrateForm, network_bridge: e.target.value})} className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white text-sm" />
                                                                 </div>
                                                                 
+                                                                {/* Firmware / BIOS */}
+                                                                <div>
+                                                                    <label className="text-xs text-gray-500 mb-1 block">Firmware</label>
+                                                                    <select value={vmwareMigrateForm.bios} onChange={e => setVmwareMigrateForm({...vmwareMigrateForm, bios: e.target.value})} className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white text-sm">
+                                                                        <option value="auto">Auto-detect ({vmwareMigrationPlan?.source?.hardware?.firmware || 'bios'})</option>
+                                                                        <option value="seabios">Legacy BIOS (SeaBIOS)</option>
+                                                                        <option value="ovmf">UEFI (OVMF)</option>
+                                                                    </select>
+                                                                </div>
+
+                                                                {/* NICs from VMware */}
+                                                                {vmwareMigrationPlan?.source?.nics?.length > 0 && (
+                                                                    <div>
+                                                                        <label className="text-xs text-gray-500 mb-1 block">Network Interfaces ({vmwareMigrationPlan.source.nics.length} detected)</label>
+                                                                        <div className="space-y-1 p-2 bg-proxmox-dark rounded-lg border border-proxmox-border max-h-32 overflow-y-auto">
+                                                                            {vmwareMigrationPlan.source.nics.map((nic, i) => (
+                                                                                <div key={i} className="flex items-center gap-2 text-xs text-gray-300 py-1">
+                                                                                    <span className="text-green-400">●</span>
+                                                                                    <span className="font-mono">{nic.pve_model || nic.type}</span>
+                                                                                    <span className="text-gray-500">—</span>
+                                                                                    <span className="text-gray-400">{nic.network || 'N/A'}</span>
+                                                                                    {nic.mac_address && <span className="text-gray-600 font-mono ml-auto">{nic.mac_address}</span>}
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                        <label className="flex items-center gap-2 text-xs text-gray-400 mt-2">
+                                                                            <input type="checkbox" checked={vmwareMigrateForm.preserve_mac} onChange={e => setVmwareMigrateForm({...vmwareMigrateForm, preserve_mac: e.target.checked})} className="rounded" />
+                                                                            Preserve MAC addresses
+                                                                        </label>
+                                                                    </div>
+                                                                )}
+
                                                                 {/* Transfer Mode */}
                                                                 <div>
                                                                     <label className="text-xs text-gray-500 mb-1 block">Transfer Mode</label>

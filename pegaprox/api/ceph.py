@@ -361,7 +361,7 @@ def get_ceph_osds(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/osd', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def create_ceph_osd(cluster_id, node):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -381,7 +381,7 @@ def create_ceph_osd(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/osd/<int:osdid>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def destroy_ceph_osd(cluster_id, node, osdid):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -407,7 +407,7 @@ def destroy_ceph_osd(cluster_id, node, osdid):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/osd/<int:osdid>/<action>', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def ceph_osd_action(cluster_id, node, osdid, action):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -449,7 +449,7 @@ def get_ceph_mons(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/mon/<monid>', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def create_ceph_mon(cluster_id, node, monid):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -469,7 +469,7 @@ def create_ceph_mon(cluster_id, node, monid):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/mon/<monid>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def destroy_ceph_mon(cluster_id, node, monid):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -509,7 +509,7 @@ def get_ceph_mds(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/mds/<name>', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def create_ceph_mds(cluster_id, node, name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -528,7 +528,7 @@ def create_ceph_mds(cluster_id, node, name):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/mds/<name>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def destroy_ceph_mds(cluster_id, node, name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -589,7 +589,7 @@ def get_ceph_pools(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/pool', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def create_ceph_pool(cluster_id, node):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -609,7 +609,7 @@ def create_ceph_pool(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/pool/<name>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def update_ceph_pool(cluster_id, node, name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -629,7 +629,7 @@ def update_ceph_pool(cluster_id, node, name):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/pool/<name>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def destroy_ceph_pool(cluster_id, node, name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -678,7 +678,7 @@ def get_ceph_fs(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/fs', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def create_ceph_fs(cluster_id, node):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -698,7 +698,7 @@ def create_ceph_fs(cluster_id, node):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/fs/<name>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def destroy_ceph_fs(cluster_id, node, name):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -746,7 +746,7 @@ def get_ceph_rules(cluster_id, node):
 # ============================================
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/<action>', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def ceph_service_action(cluster_id, node, action):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -768,7 +768,7 @@ def ceph_service_action(cluster_id, node, action):
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/ceph/init', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def init_ceph(cluster_id, node):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -872,7 +872,7 @@ def get_mirror_pool_status(cluster_id, pool):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/enable', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def enable_mirror_pool(cluster_id, pool):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -900,7 +900,7 @@ def enable_mirror_pool(cluster_id, pool):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/disable', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def disable_mirror_pool(cluster_id, pool):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -925,7 +925,7 @@ def disable_mirror_pool(cluster_id, pool):
 # -- Peer management --
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/peer', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def add_mirror_peer(cluster_id, pool):
     """MK: add a mirroring peer to a pool"""
     ok, err = check_cluster_access(cluster_id)
@@ -969,7 +969,7 @@ def add_mirror_peer(cluster_id, pool):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/peer/<uuid>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def remove_mirror_peer(cluster_id, pool, uuid):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1061,7 +1061,7 @@ def get_mirror_image_status(cluster_id, pool, image):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/image/<image>/enable', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def enable_mirror_image(cluster_id, pool, image):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1089,7 +1089,7 @@ def enable_mirror_image(cluster_id, pool, image):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/image/<image>/disable', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def disable_mirror_image(cluster_id, pool, image):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1112,7 +1112,7 @@ def disable_mirror_image(cluster_id, pool, image):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/image/<image>/promote', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def promote_mirror_image(cluster_id, pool, image):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1142,7 +1142,7 @@ def promote_mirror_image(cluster_id, pool, image):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/image/<image>/demote', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def demote_mirror_image(cluster_id, pool, image):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1165,7 +1165,7 @@ def demote_mirror_image(cluster_id, pool, image):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/image/<image>/resync', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def resync_mirror_image(cluster_id, pool, image):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1210,7 +1210,7 @@ def get_mirror_schedules(cluster_id, pool):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/schedule', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def add_mirror_schedule(cluster_id, pool):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
@@ -1238,7 +1238,7 @@ def add_mirror_schedule(cluster_id, pool):
 
 
 @bp.route('/api/clusters/<cluster_id>/ceph/mirror/pool/<pool>/schedule', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['ceph.manage'])
 def remove_mirror_schedule(cluster_id, pool):
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err

@@ -152,7 +152,7 @@ def get_esxi_hosts(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/esxi-hosts', methods=['POST'])
-@require_auth(perms=['admin.cluster'])
+@require_auth(perms=['cluster.admin'])
 def connect_esxi_host(cluster_id):
     """Add ESXi host as Proxmox storage
 
@@ -239,7 +239,7 @@ def connect_esxi_host(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/esxi-hosts/<host_id>', methods=['DELETE'])
-@require_auth(perms=['admin.cluster'])
+@require_auth(perms=['cluster.admin'])
 def disconnect_esxi_host(cluster_id, host_id):
     """Remove ESXi storage from Proxmox"""
     ok, err = check_cluster_access(cluster_id)
@@ -485,7 +485,7 @@ def get_storage_clusters(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/storage-clusters', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def create_storage_cluster(cluster_id):
     """Create a new storage cluster"""
     ok, err = check_cluster_access(cluster_id)
@@ -539,7 +539,7 @@ def create_storage_cluster(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/storage-clusters/<sc_id>', methods=['PUT'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def update_storage_cluster(cluster_id, sc_id):
     """Update a storage cluster"""
     ok, err = check_cluster_access(cluster_id)
@@ -590,7 +590,7 @@ def update_storage_cluster(cluster_id, sc_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/storage-clusters/<sc_id>', methods=['DELETE'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def delete_storage_cluster(cluster_id, sc_id):
     """Delete a storage cluster"""
     ok, err = check_cluster_access(cluster_id)
@@ -858,7 +858,7 @@ def get_storage_cluster_status(cluster_id, sc_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/storage-balancing/migrate', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def execute_storage_migration(cluster_id):
     """Execute a storage migration (move disk to different storage)"""
     ok, err = check_cluster_access(cluster_id)
@@ -948,7 +948,7 @@ def execute_storage_migration(cluster_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/storage-balancing/stats', methods=['GET'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def get_storage_balancing_stats(cluster_id):
     """Get storage balancing stats for monitoring large clusters
 
@@ -1342,7 +1342,7 @@ auto_balance_thread.start()
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/storage', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def create_storage(cluster_id):
     """create new storage on proxmox - NS Dec 2025"""
     ok, err = check_cluster_access(cluster_id)
@@ -1615,7 +1615,7 @@ def get_storage_status(cluster_id, storage_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/datacenter/storage/<storage_id>/rescan', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def rescan_storage(cluster_id, storage_id):
     """Rescan storage to detect new LUNs, volumes, or refresh status
 
@@ -1923,7 +1923,7 @@ def rescan_storage(cluster_id, storage_id):
 
 
 @bp.route('/api/clusters/<cluster_id>/storage/scan', methods=['POST'])
-@require_auth(roles=[ROLE_ADMIN])
+@require_auth(perms=['storage.config'])
 def scan_storage(cluster_id):
     """Scan/discover storage targets (for iSCSI, NFS exports, etc.)
 

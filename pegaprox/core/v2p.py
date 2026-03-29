@@ -65,6 +65,9 @@ class V2PMigrationTask:
         self.net_driver = self.config.get('net_driver', '')  # auto-detect, or: e1000, e1000e, virtio, vmxnet3
         self.disk_bus = self.config.get('disk_bus', '')  # auto-detect, or: scsi, sata, ide
         self.transfer_mode = self.config.get('transfer_mode', 'auto')  # auto, sshfs_boot, offline
+        self.bios_override = self.config.get('bios', 'auto')  # auto, seabios, ovmf
+        self.selected_nics = self.config.get('selected_nics', None)  # list of NIC dicts or None for all
+        self.preserve_mac = self.config.get('preserve_mac', False)
     
     def log(self, msg):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -319,19 +322,23 @@ def _run_v2p_migration(task):
         guest_os = vm_data.get('guest_os', '').lower()
         hw = vm_data.get('hardware', {})
         
-        # Firmware: match VMware (BIOS vs EFI)
-        firmware = hw.get('firmware', 'bios')
-        if firmware == 'efi':
-            bios = 'ovmf'; machine = 'q35'
+        # Firmware: user override or auto-detect from VMware
+        bios_override = getattr(task, 'bios_override', 'auto') or 'auto'
+        if bios_override != 'auto':
+            bios = bios_override
+            machine = 'q35' if bios == 'ovmf' else 'pc'
         else:
-            bios = 'seabios'; machine = 'pc'
-        
+            firmware = hw.get('firmware', 'bios')
+            if firmware == 'efi':
+                bios = 'ovmf'; machine = 'q35'
+            else:
+                bios = 'seabios'; machine = 'pc'
+
         # OS type for Proxmox
         ostype = 'l26'
         if 'windows' in guest_os:
             ostype = 'win11' if any(x in guest_os for x in ['11', '2022', '2025']) else 'win10'
-            if bios == 'seabios':
-                bios = 'ovmf'; machine = 'q35'  # Windows 10+ prefers EFI
+            # NS: removed forced EFI override — user can choose BIOS in migration wizard
         
         # SCSI controller: match VMware (PVSCSI, LSI Logic, etc.)
         scsihw = hw.get('scsi_controller_pve', 'virtio-scsi-single')
@@ -359,12 +366,24 @@ def _run_v2p_migration(task):
             'memory': vm_data.get('memory_mb', 2048),
             'cores': vm_data.get('cpu_count', 1),
             'sockets': 1,
-            'net0': f'{net_driver},bridge={task.network_bridge}',
             'ostype': ostype, 'bios': bios, 'machine': machine,
             'scsihw': scsihw,
             'cpu': 'host',
             'boot': f'order={disk_bus}0;net0',
         }
+
+        # NS: create all selected NICs (not just primary), optionally preserve MACs
+        selected_nics = getattr(task, 'selected_nics', None) or vm_data.get('nics', [])
+        preserve_mac = getattr(task, 'preserve_mac', False)
+        if selected_nics:
+            for idx, nic in enumerate(selected_nics if isinstance(selected_nics, list) else [selected_nics]):
+                model = nic.get('pve_model', net_driver) if isinstance(nic, dict) else net_driver
+                nic_str = f'{model},bridge={task.network_bridge}'
+                if preserve_mac and isinstance(nic, dict) and nic.get('mac_address'):
+                    nic_str += f',macaddr={nic["mac_address"]}'
+                pve_config[f'net{idx}'] = nic_str
+        else:
+            pve_config['net0'] = f'{net_driver},bridge={task.network_bridge}'
         if bios == 'ovmf':
             pve_config['efidisk0'] = f'{task.target_storage}:1,efitype=4m,pre-enrolled-keys=0'
         

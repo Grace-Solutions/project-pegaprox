@@ -921,12 +921,22 @@
                 <div className={`corp-node-row ${nodeStatusCls}`}>
                     {/* Main Row */}
                     <div className={`flex items-center gap-3 px-3 py-2 text-[13px] cursor-pointer ${isOffline ? 'opacity-50' : ''}`} onClick={() => !isOffline && setExpanded(!expanded)}>
-                        {!isOffline && <Icons.ChevronRight className={`w-3 h-3 flex-shrink-0`} style={{color: '#728b9a', transform: expanded ? 'rotate(90deg)' : 'none'}} />}
+                        {!isOffline && <Icons.ChevronRight className="w-3 h-3 flex-shrink-0 transition-transform" style={{color: '#728b9a', transform: expanded ? 'rotate(90deg)' : 'none'}} />}
                         <span className="w-2 h-2 rounded-full flex-shrink-0" style={statusDotStyle}></span>
                         <span className="font-medium w-32 truncate" style={{color: '#e9ecef'}}>{name}</span>
                         {!isOffline ? (
                             <>
                                 {statusLabel && <span className={`corp-badge ${isInMaintenance ? 'corp-badge-locked' : 'corp-badge-ha'}`}>{statusLabel}</span>}
+                                {isUpdating && updateTask && !isInMaintenance && (
+                                    <span className="corp-badge" style={{
+                                        background: updateTask.status === 'failed' ? 'rgba(245,79,71,0.15)' : updateTask.status === 'completed' ? 'rgba(96,181,21,0.15)' : 'rgba(73,175,217,0.15)',
+                                        color: updateTask.status === 'failed' ? '#f54f47' : updateTask.status === 'completed' ? '#60b515' : '#49afd9',
+                                        border: `1px solid ${updateTask.status === 'failed' ? 'rgba(245,79,71,0.3)' : updateTask.status === 'completed' ? 'rgba(96,181,21,0.3)' : 'rgba(73,175,217,0.3)'}`
+                                    }}>
+                                        {updateTask.status === 'completed' ? '✓ ' : updateTask.status === 'failed' ? '✕ ' : '⟳ '}
+                                        {updateTask.status === 'failed' ? t('updateFailed') : updateTask.status === 'completed' ? t('updateCompleted') : `${t('updating') || 'Updating'}: ${updateTask.phase || '...'}`}
+                                    </span>
+                                )}
                                 <span className="w-8" style={{color: '#728b9a'}}>CPU</span>
                                 <div className="w-20 h-1.5 flex-shrink-0 overflow-hidden" style={{background: 'var(--corp-bar-track)', borderRadius: '1px'}}>
                                     <div className="h-full" style={{width: `${Math.min(cpuPercent, 100)}%`, background: '#49afd9', borderRadius: '1px'}}></div>
@@ -939,7 +949,7 @@
                                 </div>
                                 <span className="w-12 text-right" style={{color: '#adbbc4'}}>{ramPercent}%</span>
                                 {(() => { const d = histRef.current.mem; const mx = Math.max(...d, 1); const pts = d.map((v,i) => `${(i/19)*40},${12-((v/mx)*12)}`).join(' '); return <svg width="40" height="12" className="corp-sparkline-inline"><polyline fill="none" stroke="#9b59b6" strokeWidth="1" points={pts} /><circle cx="40" cy={12-((d[19]/mx)*12)} r="1.5" fill="#9b59b6" /></svg>; })()}
-                                {metrics.score != null && <span className="ml-3 w-16" style={{color: '#728b9a'}}>{t('score')}: <span style={{color: '#adbbc4'}}>{metrics.score}</span></span>}
+                                {metrics.score != null && <span className="ml-3 w-16" style={{color: '#728b9a'}}>{t('score')}: <span style={{color: '#adbbc4'}}>{Number(metrics.score).toFixed(1)}</span></span>}
                                 <span className="ml-3" style={{color: '#728b9a'}}>{formatUptime(metrics.uptime)}</span>
                                 <span className="flex-1"></span>
                                 {isInMaintenance && maintenanceTask && maintenanceTask.status === 'running' && (
