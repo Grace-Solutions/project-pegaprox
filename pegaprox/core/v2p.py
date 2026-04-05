@@ -472,7 +472,26 @@ def _run_v2p_migration(task):
             "sed -i 's/^#user_allow_other/user_allow_other/' /etc/fuse.conf 2>/dev/null || "
             "echo 'user_allow_other' >> /etc/fuse.conf",
             timeout=10)
-        
+
+        # NS: resolve datastore symlink — /vmfs/volumes/<name> -> /vmfs/volumes/<uuid>
+        # SSHFS can't mount symlinks, need the real path
+        # ESXi BusyBox may not have readlink -f, so try multiple methods
+        rc_rl, out_rl, _ = _ssh_exec(esxi_host, esxi_user, esxi_pass,
+            f"readlink /vmfs/volumes/{shlex.quote(datastore)} 2>/dev/null || "
+            f"realpath /vmfs/volumes/{shlex.quote(datastore)} 2>/dev/null || "
+            f"ls -ld /vmfs/volumes/{shlex.quote(datastore)} 2>/dev/null | awk '{{print $NF}}'",
+            timeout=10)
+        resolved = str(out_rl or '').strip().split('\n')[0]
+        if resolved and not resolved.startswith('/'):
+            # readlink without -f returns relative target (just the UUID), prepend parent
+            resolved = f"/vmfs/volumes/{resolved}"
+        if resolved and resolved.startswith('/vmfs/'):
+            ds_mount_path = resolved
+            if ds_mount_path != f"/vmfs/volumes/{datastore}":
+                task.log(f"Resolved datastore symlink: {datastore} → {ds_mount_path}")
+        else:
+            ds_mount_path = f"/vmfs/volumes/{datastore}"
+
         # SSHFS SSH options -- include legacy algorithms for ESXi compatibility
         # Performance options (each one matters for drive-mirror speed):
         #   kernel_cache: use kernel page cache (huge for sequential reads)
@@ -506,7 +525,7 @@ def _run_v2p_migration(task):
             f"mkdir -p {mnt_path} && "
             f"printf '%s' {safe_pass} | sshfs -o password_stdin,"
             f"{sshfs_ssh_opts},{sshfs_algo_opts} "
-            f"{esxi_user}@{esxi_host}:/vmfs/volumes/{shlex.quote(datastore)} {mnt_path}"
+            f"{esxi_user}@{esxi_host}:{ds_mount_path} {mnt_path}"
         )
         rc, out, err = _pve_node_exec(pve_mgr, task.target_node, mount_cmd, timeout=30)
         if rc != 0:
@@ -519,7 +538,7 @@ def _run_v2p_migration(task):
                 f"cache=yes,kernel_cache,"
                 f"max_read=1048576,big_writes,large_read,"
                 f"entry_timeout=3600,attr_timeout=3600 "
-                f"{esxi_user}@{esxi_host}:/vmfs/volumes/{shlex.quote(datastore)} {mnt_path}")
+                f"{esxi_user}@{esxi_host}:{ds_mount_path} {mnt_path}")
             rc, out, err = _pve_node_exec(pve_mgr, task.target_node, mount_cmd2, timeout=30)
         if rc != 0:
             # Fallback 2: minimal options (maximum compatibility)
@@ -529,7 +548,7 @@ def _run_v2p_migration(task):
                 f"StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null,"
                 f"allow_other,reconnect,ServerAliveInterval=15,"
                 f"cache=yes "
-                f"{esxi_user}@{esxi_host}:/vmfs/volumes/{shlex.quote(datastore)} {mnt_path}")
+                f"{esxi_user}@{esxi_host}:{ds_mount_path} {mnt_path}")
             rc, out, err = _pve_node_exec(pve_mgr, task.target_node, mount_cmd3, timeout=30)
             if rc != 0:
                 task.set_phase('failed', f'SSHFS mount failed: {err}'); return
@@ -2413,6 +2432,16 @@ def _do_sshfs_boot_migration(pve_mgr, task, vmware_mgr, esxi_host, esxi_user, es
             "-o KexAlgorithms=+diffie-hellman-group14-sha1\\,diffie-hellman-group14-sha256 "
             "-o PreferredAuthentications=keyboard-interactive\\,password"
         )
+        # resolve symlink for SSHFS (same as main mount)
+        rc_rl2, out_rl2, _ = _ssh_exec(esxi_host, esxi_user, esxi_pass,
+            f"readlink /vmfs/volumes/{shlex.quote(datastore)} 2>/dev/null || "
+            f"realpath /vmfs/volumes/{shlex.quote(datastore)} 2>/dev/null || "
+            f"echo {shlex.quote(datastore)}",
+            timeout=10)
+        resolved2 = str(out_rl2 or '').strip().split('\n')[0]
+        if resolved2 and not resolved2.startswith('/'):
+            resolved2 = f"/vmfs/volumes/{resolved2}"
+        ds_remount = resolved2 if resolved2 and resolved2.startswith('/vmfs/') else f"/vmfs/volumes/{datastore}"
         rc_remount, _, _ = _pve_node_exec(pve_mgr, task.target_node,
             f"fusermount -u {mnt_path} 2>/dev/null; "
             f"mkdir -p {mnt_path} && "
@@ -2420,7 +2449,7 @@ def _do_sshfs_boot_migration(pve_mgr, task, vmware_mgr, esxi_host, esxi_user, es
             f"StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null,"
             f"allow_other,reconnect,ServerAliveInterval=15,"
             f"cache=yes,{sshfs_algo} "
-            f"{esxi_user}@{esxi_host}:/vmfs/volumes/{shlex.quote(datastore)} {mnt_path} 2>&1",
+            f"{esxi_user}@{esxi_host}:{ds_remount} {mnt_path} 2>&1",
             timeout=20)
         if rc_remount == 0:
             # Retry with NBD after remount

@@ -26,6 +26,21 @@
             const lastMetricsRef = useRef(null);
             const lastNetRef = useRef({ netin: 0, netout: 0, time: Date.now() });
 
+            // auto-dismiss update banner after 30s when completed (#183)
+            useEffect(() => {
+                if (!metrics?.is_updating || !metrics?.update_task) return;
+                const st = metrics.update_task.status;
+                if (st !== 'completed' && st !== 'failed') return;
+                const timer = setTimeout(async () => {
+                    try {
+                        await fetch(`${API_URL}/clusters/${clusterId}/nodes/${name}/update`, {
+                            method: 'DELETE', credentials: 'include', headers: getAuthHeaders()
+                        });
+                    } catch(e) {}
+                }, st === 'completed' ? 30000 : 120000);  // 30s for success, 2min for failed
+                return () => clearTimeout(timer);
+            }, [metrics?.update_task?.status]);
+
             useEffect(() => {
                 if (metrics && metrics !== lastMetricsRef.current) {
                     lastMetricsRef.current = metrics;
@@ -189,9 +204,10 @@
                                                         });
                                                     } catch (e) {}
                                                 }}
-                                                className="text-xs text-gray-400 hover:text-white px-2 py-0.5 hover:bg-proxmox-hover rounded transition-colors"
+                                                className="text-xs text-gray-300 hover:text-white px-2 py-1 bg-proxmox-hover hover:bg-proxmox-border rounded transition-colors"
+                                                title={t('dismissUpdate') || 'Dismiss'}
                                             >
-                                                ✕
+                                                ✕ {t('dismiss') || 'Dismiss'}
                                             </button>
                                         )}
                                     </div>

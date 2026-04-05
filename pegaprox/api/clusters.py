@@ -189,6 +189,103 @@ def add_cluster():
     return jsonify(result), 201
 
 
+@bp.route('/api/clusters/<cluster_id>/config/export', methods=['GET'])
+@require_auth(roles=[ROLE_ADMIN])
+def export_cluster_config(cluster_id):
+    """Export cluster config WITHOUT secrets — for re-configure pre-fill (#256)"""
+    if cluster_id not in cluster_managers:
+        return jsonify({'error': 'Cluster not found'}), 404
+    mgr = cluster_managers[cluster_id]
+    c = mgr.config
+    return jsonify({
+        'name': c.name, 'host': c.host, 'user': c.user,
+        'ssl_verification': c.ssl_verification,
+        'migration_threshold': c.migration_threshold,
+        'migration_tolerance': getattr(c, 'migration_tolerance', 10),
+        'check_interval': c.check_interval,
+        'auto_migrate': c.auto_migrate,
+        'balance_containers': getattr(c, 'balance_containers', False),
+        'balance_local_disks': getattr(c, 'balance_local_disks', False),
+        'dry_run': c.dry_run,
+        'cluster_type': getattr(mgr, 'cluster_type', 'proxmox'),
+        # secrets intentionally omitted: pass, ssh_key, api_token_secret
+    })
+
+
+@bp.route('/api/clusters/<cluster_id>/reconfigure', methods=['POST'])
+@require_auth(roles=[ROLE_ADMIN])
+def reconfigure_cluster(cluster_id):
+    """Re-configure cluster credentials. Requires re-authentication. (#256)
+    Keeps same cluster_id so VM ACLs, replication jobs etc. stay intact.
+    """
+    if cluster_id not in cluster_managers:
+        return jsonify({'error': 'Cluster not found'}), 404
+
+    data = request.json or {}
+
+    # Re-auth: user must verify their own password
+    from pegaprox.utils.auth import verify_password
+    current_password = data.pop('current_password', '')
+    username = request.session['user']
+    users = load_users()
+    user = users.get(username, {})
+
+    auth_source = user.get('auth_source', 'local')
+    if auth_source == 'local':
+        if not current_password or not user.get('password_hash') or not verify_password(current_password, user.get('password_salt', ''), user['password_hash']):
+            return jsonify({'error': 'Invalid password'}), 401
+    elif auth_source == 'ldap':
+        # LDAP user: verify against LDAP server
+        from pegaprox.utils.ldap import ldap_authenticate
+        ldap_result = ldap_authenticate(username, current_password) if current_password else {}
+        if not current_password or 'error' in ldap_result:
+            return jsonify({'error': 'Invalid LDAP password'}), 401
+    else:
+        return jsonify({'error': 'Re-authentication not supported for this account type. Use a local admin account.'}), 400
+
+    # Validate required fields (same as add_cluster)
+    for field in ['name', 'host', 'user']:
+        if field not in data:
+            return jsonify({'error': f'Missing required field: {field}'}), 400
+    if not data.get('pass') and not data.get('ssh_key'):
+        return jsonify({'error': 'Password or SSH key is required'}), 400
+    if 'pass' not in data:
+        data['pass'] = ''
+
+    cluster_type = data.get('cluster_type', getattr(cluster_managers[cluster_id], 'cluster_type', 'proxmox'))
+
+    # Create new config + manager, test connection
+    new_config = PegaProxConfig(data)
+    if cluster_type == 'xcpng':
+        if not XENAPI_AVAILABLE:
+            return jsonify({'error': 'XenAPI library not installed'}), 400
+        new_mgr = XcpngManager(cluster_id, new_config)
+        if not new_mgr.connect():
+            return jsonify({'error': f'Connection failed: {new_mgr.connection_error or "unknown"}'}), 400
+    else:
+        new_mgr = PegaProxManager(cluster_id, new_config)
+        if not new_mgr.connect_to_proxmox():
+            return jsonify({'error': f'Connection failed: {new_mgr.connection_error or "unknown"}'}), 400
+
+    # Stop old manager, swap in new one
+    old_mgr = cluster_managers[cluster_id]
+    try:
+        old_mgr.stop()
+    except Exception:
+        pass
+
+    new_mgr.start()
+    cluster_managers[cluster_id] = new_mgr
+    save_config()
+
+    log_audit(username, 'cluster.reconfigured', f"Re-configured cluster: {data.get('name')} ({data.get('host')})")
+
+    result = {'success': True, 'message': 'Cluster re-configured successfully'}
+    if getattr(new_mgr, '_token_auto_created', False):
+        result['api_token_created'] = True
+    return jsonify(result)
+
+
 @bp.route('/api/clusters/<cluster_id>/nodes', methods=['GET'])
 @require_auth(perms=['node.view'])
 def get_cluster_nodes(cluster_id):

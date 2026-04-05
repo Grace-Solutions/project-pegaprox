@@ -2651,6 +2651,39 @@
                                 </div>
                             )}
 
+                            {/* Rolling Update Completed/Failed Banner (#183) */}
+                            {rollingUpdate && (rollingUpdate.status === 'completed' || rollingUpdate.status === 'failed' || rollingUpdate.status === 'cancelled') && (
+                                <div className={`p-4 ${rollingUpdate.status === 'completed' ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'} rounded-lg`}>
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            {rollingUpdate.status === 'completed' ? (
+                                                <Icons.CheckCircle className="w-5 h-5 text-green-400" />
+                                            ) : (
+                                                <Icons.XCircle className="w-5 h-5 text-red-400" />
+                                            )}
+                                            <span className={`font-semibold ${rollingUpdate.status === 'completed' ? 'text-green-400' : 'text-red-400'}`}>
+                                                {rollingUpdate.status === 'completed' ? (t('rollingUpdateCompleted') || 'Rolling Update Completed') :
+                                                 rollingUpdate.status === 'cancelled' ? (t('rollingUpdateCancelled') || 'Rolling Update Cancelled') :
+                                                 (t('rollingUpdateFailed') || 'Rolling Update Failed')}
+                                            </span>
+                                        </div>
+                                        <button
+                                            onClick={() => setRollingUpdate(null)}
+                                            className="text-xs text-gray-300 hover:text-white px-2 py-1 bg-proxmox-hover hover:bg-proxmox-border rounded transition-colors"
+                                        >
+                                            ✕ {t('dismiss') || 'Dismiss'}
+                                        </button>
+                                    </div>
+                                    {(rollingUpdate.completed_nodes?.length > 0 || rollingUpdate.failed_nodes?.length > 0) && (
+                                        <p className="text-xs text-gray-400 mt-2">
+                                            {rollingUpdate.completed_nodes?.length || 0}/{rollingUpdate.nodes?.length || '?'} {t('nodesUpdated') || 'nodes updated'}
+                                            {rollingUpdate.failed_nodes?.length > 0 && `, ${rollingUpdate.failed_nodes.length} failed`}
+                                            {rollingUpdate.skipped_nodes?.length > 0 && `, ${rollingUpdate.skipped_nodes.length} skipped`}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Rolling Update Progress */}
                             {rollingUpdate && (rollingUpdate.status === 'running' || rollingUpdate.status === 'paused') && (
                                 <div className={`p-4 ${rollingUpdate.status === 'paused' ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-blue-500/10 border border-blue-500/30'} rounded-lg space-y-4`}>

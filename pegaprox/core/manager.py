@@ -8721,7 +8721,41 @@ echo "AGENT_INSTALLED_OK"
         except Exception as e:
             self.logger.error(f"[VNC] Error: {e}")
             return {'success': False, 'error': str(e)}
-    
+
+    def get_term_ticket(self, node: str, vmid: int, vm_type: str) -> Dict[str, Any]:
+        """Get xterm.js terminal ticket for LXC/QEMU — uses Proxmox termproxy instead of vncproxy"""
+        if not self.is_connected:
+            if not self.connect_to_proxmox():
+                return {'success': False, 'error': 'Could not connect to Proxmox'}
+        try:
+            host = self.host
+            if vm_type == 'qemu':
+                url = f"https://{host}:8006/api2/json/nodes/{node}/qemu/{vmid}/termproxy"
+            else:
+                url = f"https://{host}:8006/api2/json/nodes/{node}/lxc/{vmid}/termproxy"
+
+            self.logger.info(f"[TERM] Requesting terminal ticket from {host} for {vm_type}/{vmid} on {node}")
+            session = self._create_session()
+            response = session.post(url, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()['data']
+                return {
+                    'success': True,
+                    'ticket': data.get('ticket'),
+                    'port': data.get('port'),
+                    'host': host,
+                    'node': node,
+                    'vmid': vmid,
+                    'vm_type': vm_type,
+                    'pve_auth_cookie': self._ticket
+                }
+            else:
+                return {'success': False, 'error': f"Proxmox error: {response.text}"}
+        except Exception as e:
+            self.logger.error(f"[TERM] Error: {e}")
+            return {'success': False, 'error': str(e)}
+
     def get_node_shell_ticket(self, node: str) -> Dict[str, Any]:
         
         if not self.is_connected:

@@ -535,8 +535,8 @@
                     }`}
                     style={{ animationDelay: `${idx * 30}ms` }}
                 >
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
                             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColor} ${
                                 cluster.connected === false ? 'animate-pulse' : hasOfflineNodes ? 'animate-pulse' : cluster.status === 'running' ? 'status-online' : ''
                             }`} />
@@ -553,6 +553,15 @@
                             >
                                 <Icons.Edit className="w-3.5 h-3.5" />
                             </button>
+                            {isAdmin && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setReconfigureCluster(cluster); }}
+                                    className="p-1 rounded hover:bg-orange-500/10 text-gray-500 hover:text-orange-400 transition-colors"
+                                    title={t('reconfigureCluster') || 'Re-configure'}
+                                >
+                                    <Icons.Settings className="w-3.5 h-3.5" />
+                                </button>
+                            )}
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -2333,6 +2342,11 @@
             const [ctxMenu, setCtxMenu] = useState(null); // LW: Mar 2026 - right-click context menu { type, target, position }
             const [renamingCluster, setRenamingCluster] = useState(null);
             const [renameValue, setRenameValue] = useState('');
+            // #256: Re-configure cluster
+            const [reconfigureCluster, setReconfigureCluster] = useState(null);
+            const [reconfigurePassword, setReconfigurePassword] = useState('');
+            const [reconfigureConfig, setReconfigureConfig] = useState(null);
+            const [reconfigureLoading, setReconfigureLoading] = useState(false);
             // NS: Mar 2026 - pool/folder view for corporate sidebar
             const [sidebarViewMode, setSidebarViewMode] = useState(() => localStorage.getItem('pegaprox-sidebar-view') || 'tree');
             const [sidebarSearch, setSidebarSearch] = useState('');
@@ -6167,6 +6181,42 @@
                 } catch(e) { addToast('Rename failed', 'error'); }
             };
 
+            // #256: Re-configure cluster — verify password then open AddClusterModal with pre-filled config
+            const handleReconfigureAuth = async () => {
+                if (!reconfigureCluster || !reconfigurePassword) return;
+                setReconfigureLoading(true);
+                try {
+                    // verify password first
+                    const verifyResp = await authFetch(`${API_URL}/auth/verify-password`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: reconfigurePassword })
+                    });
+                    if (!verifyResp || !verifyResp.ok) {
+                        addToast(t('invalidPassword') || 'Invalid password', 'error');
+                        setReconfigureLoading(false);
+                        return;
+                    }
+                    // load non-secret config
+                    const cfgResp = await authFetch(`${API_URL}/clusters/${reconfigureCluster.id}/config/export`);
+                    if (!cfgResp || !cfgResp.ok) {
+                        addToast('Failed to load cluster config', 'error');
+                        setReconfigureLoading(false);
+                        return;
+                    }
+                    const cfg = await cfgResp.json();
+                    cfg._cluster_id = reconfigureCluster.id;
+                    cfg._current_password = reconfigurePassword;
+                    setReconfigureConfig(cfg);
+                    setReconfigureCluster(null);
+                    setReconfigurePassword('');
+                    setShowAddModal(true);
+                } catch(e) {
+                    addToast('Error', 'error');
+                }
+                setReconfigureLoading(false);
+            };
+
             // Debounced config update - batches rapid changes
             const pendingConfigUpdates = useRef({});
             const configUpdateTimer = useRef(null);
@@ -6713,6 +6763,7 @@
                         { separator: true },
                         { label: t('refreshData') || 'Refresh', icon: <Icons.RefreshCw className="w-3.5 h-3.5" />, onClick: () => { fetchSidebarClusterData(cluster.id); if (selectedCluster?.id === cluster.id) { fetchClusterMetrics(cluster.id); fetchClusterResources(cluster.id); } } },
                         { separator: true },
+                        { label: t('reconfigureCluster') || 'Re-configure', icon: <Icons.Settings className="w-3.5 h-3.5" />, onClick: () => setReconfigureCluster(cluster) },
                         { label: t('deleteCluster') || 'Remove Cluster', icon: <Icons.Trash className="w-3.5 h-3.5" />, danger: true, onClick: () => handleDeleteCluster(cluster.id) },
                     ];
                 }
@@ -8033,6 +8084,9 @@
                                                             <button onClick={() => { setRenamingCluster(selectedCluster); setRenameValue(selectedCluster.display_name || selectedCluster.name || ''); }} className="corp-rename-btn" title={t('renameCluster') || 'Rename'} style={{background:'none', border:'none', cursor:'pointer', padding:'2px', color:'var(--corp-text-muted)', display:'inline-flex', alignItems:'center'}}>
                                                                 <Icons.Edit className="w-3 h-3" />
                                                             </button>
+                                                            {isAdmin && <button onClick={() => setReconfigureCluster(selectedCluster)} title={t('reconfigureCluster') || 'Re-configure'} style={{background:'none', border:'none', cursor:'pointer', padding:'2px', color:'var(--corp-text-muted)', display:'inline-flex', alignItems:'center'}} onMouseEnter={(e) => e.currentTarget.style.color='var(--corp-accent)'} onMouseLeave={(e) => e.currentTarget.style.color='var(--corp-text-muted)'}>
+                                                                <Icons.Settings className="w-3 h-3" />
+                                                            </button>}
                                                             {isAdmin && <button onClick={() => handleDeleteCluster(selectedCluster.id)} title={t('deleteCluster') || 'Remove Cluster'} style={{background:'none', border:'none', cursor:'pointer', padding:'2px', color:'var(--corp-text-muted)', display:'inline-flex', alignItems:'center'}} onMouseEnter={(e) => e.currentTarget.style.color='#f54f47'} onMouseLeave={(e) => e.currentTarget.style.color='var(--corp-text-muted)'}>
                                                                 <Icons.Trash className="w-3 h-3" />
                                                             </button>}
@@ -14669,9 +14723,29 @@
                         initialType={addClusterType}
                         onClose={() => {
                             setShowAddModal(false);
+                            setReconfigureConfig(null);
                             setError(null);
                         }}
-                        onSubmit={handleAddCluster}
+                        reconfigureConfig={reconfigureConfig}
+                        onSubmit={reconfigureConfig ? async (config) => {
+                            setLoading(true); setError(null);
+                            try {
+                                const r = await authFetch(`${API_URL}/clusters/${reconfigureConfig._cluster_id}/reconfigure`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ ...config, current_password: reconfigureConfig._current_password })
+                                });
+                                const data = await r?.json();
+                                if (r?.ok && data?.success) {
+                                    addToast(t('clusterReconfigured') || 'Cluster re-configured successfully', 'success');
+                                    setShowAddModal(false); setReconfigureConfig(null);
+                                    fetchClusters();
+                                } else {
+                                    setError(data?.error || 'Re-configure failed');
+                                }
+                            } catch(e) { setError('Connection error'); }
+                            setLoading(false);
+                        } : handleAddCluster}
                         onAddPBS={async (config) => {
                             const result = await handleAddPBS(config);
                             if (result !== false) { setShowAddModal(false); setError(null); }
@@ -14928,6 +15002,50 @@
                                         {t('rename') || 'Rename'}
                                     </button>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* #256: Re-configure cluster password dialog */}
+                    {reconfigureCluster && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setReconfigureCluster(null); setReconfigurePassword(''); }}>
+                            <div className="bg-proxmox-card border border-proxmox-border rounded-2xl w-full max-w-sm shadow-2xl animate-scale-in overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="px-6 py-4 border-b border-proxmox-border bg-gradient-to-r from-orange-500/10 to-yellow-500/5">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-base font-semibold flex items-center gap-2 text-white">
+                                            <Icons.Settings className="w-4 h-4 text-proxmox-orange" />
+                                            {t('reconfigureCluster') || 'Re-configure Cluster'}
+                                        </h3>
+                                        <button onClick={() => { setReconfigureCluster(null); setReconfigurePassword(''); }} className="text-gray-400 hover:text-white transition-colors"><Icons.X className="w-4 h-4" /></button>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-1">{reconfigureCluster.display_name || reconfigureCluster.name} — {reconfigureCluster.host}</p>
+                                </div>
+                                <form onSubmit={e => { e.preventDefault(); handleReconfigureAuth(); }} className="p-6">
+                                    <p className="text-xs text-gray-500 mb-4">{t('reconfigureHint') || 'Enter your PegaProx password to verify your identity.'}</p>
+                                    <input
+                                        type="password"
+                                        value={reconfigurePassword}
+                                        onChange={e => setReconfigurePassword(e.target.value)}
+                                        placeholder={t('yourPassword') || 'Your password'}
+                                        className="w-full px-3 py-2.5 bg-proxmox-dark border border-proxmox-border rounded-lg text-white text-sm focus:border-proxmox-orange focus:outline-none transition-colors"
+                                        autoFocus
+                                        required
+                                    />
+                                    <div className="flex justify-end gap-3 mt-6">
+                                        <button type="button" onClick={() => { setReconfigureCluster(null); setReconfigurePassword(''); }} className="px-4 py-2 bg-proxmox-dark border border-proxmox-border hover:bg-proxmox-hover rounded-lg text-sm text-gray-300 transition-colors">
+                                            {t('cancel') || 'Cancel'}
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            disabled={reconfigureLoading || !reconfigurePassword}
+                                            className="px-5 py-2 rounded-lg text-sm font-medium bg-proxmox-orange hover:bg-orange-600 text-white disabled:opacity-50 transition-colors"
+                                        >
+                                            {reconfigureLoading ? (
+                                                <span className="flex items-center gap-2"><div className="animate-spin w-3 h-3 border-2 border-white border-t-transparent rounded-full"></div>{t('connecting') || 'Connecting...'}</span>
+                                            ) : (t('reconfigure') || 'Re-configure')}
+                                        </button>
+                                    </div>
+                                </form>
                             </div>
                         </div>
                     )}

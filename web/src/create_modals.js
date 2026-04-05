@@ -1645,7 +1645,7 @@
         // Add Cluster Modal
         // LW: Wizard for adding new Proxmox clusters
         // Defaults are pretty sensible, most users just need host + credentials
-        function AddClusterModal({ isOpen, onClose, onSubmit, onAddPBS, onAddVMware, loading, error, initialType = 'proxmox' }) {
+        function AddClusterModal({ isOpen, onClose, onSubmit, onAddPBS, onAddVMware, loading, error, initialType = 'proxmox', reconfigureConfig = null }) {
             const { t } = useTranslation();
             const { isCorporate } = useLayout();
             const [connectionType, setConnectionType] = useState(initialType);
@@ -1653,7 +1653,17 @@
             // Sync with initialType when modal opens with different type
             useEffect(() => {
                 if (isOpen) setConnectionType(initialType);
-            }, [isOpen, initialType]);
+                // #256: pre-fill config for re-configure
+                if (isOpen && reconfigureConfig) {
+                    setConnectionType(reconfigureConfig.cluster_type || 'proxmox');
+                    const rc = reconfigureConfig;
+                    if (rc.cluster_type === 'xcpng') {
+                        setXcpConfig(prev => ({ ...prev, name: rc.name || '', host: rc.host || '', user: rc.user || '', pass: '', ssl_verification: rc.ssl_verification || false, migration_threshold: rc.migration_threshold || 20, check_interval: rc.check_interval || 300, auto_migrate: rc.auto_migrate || false, dry_run: rc.dry_run || false }));
+                    } else {
+                        setConfig(prev => ({ ...prev, name: rc.name || '', host: rc.host || '', user: rc.user || '', pass: '', ssl_verification: rc.ssl_verification || false, migration_threshold: rc.migration_threshold || 20, migration_tolerance: rc.migration_tolerance || 10, check_interval: rc.check_interval || 300, auto_migrate: rc.auto_migrate || false, balance_containers: rc.balance_containers || false, balance_local_disks: rc.balance_local_disks || false, dry_run: rc.dry_run || false, ssh_key: '' }));
+                    }
+                }
+            }, [isOpen, initialType, reconfigureConfig]);
             
             // Proxmox config
             const [config, setConfig] = useState({
@@ -1701,7 +1711,7 @@
                         onClick={e => e.stopPropagation()}
                     >
                         <div className="p-6 border-b border-proxmox-border">
-                            <h2 className="text-xl font-bold text-white">{t('addCluster')}</h2>
+                            <h2 className="text-xl font-bold text-white">{reconfigureConfig ? (t('reconfigureCluster') || 'Re-configure Cluster') : t('addCluster')}</h2>
                             <div className="flex gap-2 mt-3">
                                 {[
                                     { id: 'proxmox', label: 'Proxmox VE', icon: Icons.Server, active: 'bg-orange-500/20 text-orange-400 border-orange-500/40', inactive: 'bg-proxmox-dark text-gray-500 border-transparent hover:text-gray-300 hover:border-proxmox-border' },
@@ -1973,7 +1983,8 @@
                                         : connectionType === 'xcpng' ? 'bg-cyan-500 hover:bg-cyan-600'
                                         : 'bg-proxmox-orange hover:bg-orange-600'
                                     }`}>
-                                    {loading ? t('connecting') : connectionType === 'pbs' ? (t('addPbsServer') || 'Add Backup Server')
+                                    {loading ? t('connecting') : reconfigureConfig ? (t('reconfigure') || 'Re-configure')
+                                        : connectionType === 'pbs' ? (t('addPbsServer') || 'Add Backup Server')
                                         : connectionType === 'vmware' ? (t('addVmwareServer') || 'Add VMware')
                                         : connectionType === 'xcpng' ? (t('addXcpngPool') || 'Add XCP-ng Pool')
                                         : t('addCluster')}

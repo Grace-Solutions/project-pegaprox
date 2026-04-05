@@ -2791,7 +2791,7 @@
                 if(!consoleInfo || !canvasRef.current) return;
 
                 let cancelled = false;
-                
+
                 const startVNC = async () => {
                     try {
                         setConnectionStatus('connecting');
@@ -3079,6 +3079,7 @@
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
+
                                 {vm.type === 'qemu' && connectionStatus === 'connected' && (
                                     <button
                                         onClick={handleCtrlAltDel}

@@ -910,6 +910,34 @@ def get_cluster_creds_internal(cluster_id):
     })
 
 
+@bp.route('/api/auth/verify-password', methods=['POST'])
+@require_auth()
+def verify_password_api():
+    """Verify current user's password — for re-auth before sensitive ops (#256)"""
+    data = request.get_json() or {}
+    password = data.get('password', '')
+    if not password:
+        return jsonify({'error': 'Password required'}), 400
+
+    username = request.session['user']
+    users = load_users()
+    user = users.get(username, {})
+
+    auth_source = user.get('auth_source', 'local')
+    if auth_source == 'local':
+        if not user.get('password_hash') or not verify_password(password, user.get('password_salt', ''), user['password_hash']):
+            return jsonify({'error': 'Invalid password'}), 401
+    elif auth_source == 'ldap':
+        from pegaprox.utils.ldap import ldap_authenticate
+        result = ldap_authenticate(username, password)
+        if 'error' in result:
+            return jsonify({'error': 'Invalid password'}), 401
+    else:
+        return jsonify({'error': 'Password verification not supported for this account type'}), 400
+
+    return jsonify({'success': True})
+
+
 @bp.route('/api/auth/change-password', methods=['POST'])
 @require_auth()
 def auth_change_password():

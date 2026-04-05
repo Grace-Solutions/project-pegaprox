@@ -3152,25 +3152,22 @@ def get_console_ticket(cluster_id, node, vm_type, vmid):
     """Get VNC console ticket for VM - NS: Now uses VM ACLs"""
     ok, err = check_cluster_access(cluster_id)
     if not ok: return err
-    
+
     if cluster_id not in cluster_managers:
         return jsonify({'error': 'Cluster not found'}), 404
-    
-    # MK: Check VM-specific access
+
     users = load_users()
     user = users.get(request.session['user'], {})
     user['username'] = request.session['user']
-    
-    # MK: Added vm_type for pool permission check
-    # NS: XCP-ng uses xapi.vm.view for console (no separate console perm)
+
     mgr = cluster_managers[cluster_id]
     console_perm = 'xapi.vm.view' if getattr(mgr, 'cluster_type', 'proxmox') == 'xcpng' else 'vm.console'
     if not user_can_access_vm(user, cluster_id, vmid, console_perm, vm_type):
         return jsonify({'error': f'Permission denied: {console_perm}'}), 403
 
     result = mgr.get_vnc_ticket(node, vmid, vm_type)
-    
-    if result['success']:
+
+    if result.get('success'):
         return jsonify(result)
     return jsonify({'error': result.get('error', 'Failed')}), 500
 
@@ -5707,58 +5704,58 @@ def start_vnc_websocket_server(port=5001, ssl_cert=None, ssl_key=None, host='0.0
             pve_ticket = login_result['data']['ticket']
             csrf_token = login_result['data']['CSRFPreventionToken']
             print("Got PVE ticket")
-            
+
             # Step 2: Get VNC ticket
-            print("Step 2: Get VNC ticket...")
+            print(f"Step 2: Get VNC ticket...")
             if vm_type == 'qemu':
                 vnc_url = f"https://{host}:8006/api2/json/nodes/{node}/qemu/{vmid}/vncproxy"
             else:
                 vnc_url = f"https://{host}:8006/api2/json/nodes/{node}/lxc/{vmid}/vncproxy"
-            
+
             vnc_data = urlencode({'websocket': '1'}).encode('utf-8')
             vnc_req = urllib.request.Request(vnc_url, data=vnc_data, method='POST')
             vnc_req.add_header('Cookie', f'PVEAuthCookie={pve_ticket}')
             vnc_req.add_header('CSRFPreventionToken', csrf_token)
-            
+
             with urllib.request.urlopen(vnc_req, context=ssl_ctx, timeout=10) as response:
                 vnc_result = json.loads(response.read().decode('utf-8'))
-            
+
             vnc_ticket = vnc_result['data']['ticket']
             port = vnc_result['data']['port']
             print(f"Got VNC ticket, port={port}")
-            
+
             # Step 3: Connect to Proxmox WebSocket
             print("Step 3: Connect to Proxmox WebSocket...")
             encoded_vnc_ticket = url_quote(vnc_ticket, safe='')
-            
+
             if vm_type == 'qemu':
                 pve_ws_path = f"/api2/json/nodes/{node}/qemu/{vmid}/vncwebsocket?port={port}&vncticket={encoded_vnc_ticket}"
             else:
                 pve_ws_path = f"/api2/json/nodes/{node}/lxc/{vmid}/vncwebsocket?port={port}&vncticket={encoded_vnc_ticket}"
-            
+
             pve_ws_url = f"wss://{host}:8006{pve_ws_path}"
-            
+
             pve_ws = ws_client.create_connection(
                 pve_ws_url,
                 sslopt={"cert_reqs": ssl.CERT_NONE},
                 header={"Cookie": f"PVEAuthCookie={pve_ticket}"},
                 timeout=5
             )
-            
+
             print("Connected to Proxmox!")
             pve_ws.settimeout(0.05)  # Short timeout for non-blocking
-            
+
             bytes_sent = 0
             bytes_received = 0
-            
+
             print("Step 4: Starting proxy loop...")
-            
+
             import asyncio
-            
+
             bytes_sent = 0
             bytes_received = 0
             running = True
-            
+
             # Set Proxmox socket to very short timeout for non-blocking behavior
             pve_ws.settimeout(0.001)
             
@@ -5772,6 +5769,7 @@ def start_vnc_websocket_server(port=5001, ssl_cert=None, ssl_key=None, host='0.0
                             data = pve_ws.recv()
                             if data:
                                 bytes_received += len(data)
+                                # forward as-is: bytes stay bytes, strings stay strings
                                 if isinstance(data, str):
                                     data = data.encode('latin-1')
                                 await websocket.send(data)
