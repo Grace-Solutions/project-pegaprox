@@ -1953,7 +1953,7 @@
                 // Common notifications
                 connectionError: 'Verbindungsfehler',
                 saveFailed: 'Speichern fehlgeschlagen',
-                invalidDnsName: 'Ungültiger Name: nur Buchstaben, Zahlen und Bindestriche erlaubt, kein Bindestrich am Anfang/Ende, max. 63 Zeichen',
+                invalidDnsName: 'Ungültiger Name: muss mit einem Buchstaben beginnen, nur Buchstaben, Zahlen und Bindestriche erlaubt, max. 63 Zeichen',
                 addTag: 'Tag hinzufügen...',
                 invalidTagFormat: 'Ungültiges Format. Tags müssen klein geschrieben und alphanumerisch sein (Bindestriche, Punkte, Unterstriche erlaubt).',
                 deleteError: 'Fehler beim Löschen',
@@ -4998,7 +4998,7 @@
                 // Common notifications
                 connectionError: 'Connection error',
                 saveFailed: 'Save failed',
-                invalidDnsName: 'Invalid name: must be alphanumeric with optional hyphens, no leading/trailing hyphens, max 63 characters',
+                invalidDnsName: 'Invalid name: must start with a letter, only alphanumeric and hyphens allowed, max 63 characters',
                 addTag: 'Add tag...',
                 invalidTagFormat: 'Invalid format. Tags must be lowercase alphanumeric (hyphens, dots, underscores allowed).',
                 deleteError: 'Delete error',
@@ -7904,7 +7904,7 @@
                 // Common notifications
                 connectionError: 'Erreur de connexion',
                 saveFailed: 'Échec de sauvegarde',
-                invalidDnsName: 'Nom invalide : uniquement des caractères alphanumériques et des tirets, pas de tiret au début/fin, max 63 caractères',
+                invalidDnsName: 'Nom invalide : doit commencer par une lettre, uniquement alphanumériques et tirets, max 63 caractères',
                 addTag: 'Ajouter un tag...',
                 invalidTagFormat: 'Format invalide. Les tags doivent être en minuscules alphanumériques (tirets, points, underscores autorisés).',
                 deleteError: 'Erreur de suppression',
@@ -10820,7 +10820,7 @@
                 // Common notifications / Notificaciones comunes
                 connectionError: 'Error de conexión',
                 saveFailed: 'Falló guardar',
-                invalidDnsName: 'Nombre inválido: solo alfanuméricos y guiones, sin guiones al inicio/final, máx. 63 caracteres',
+                invalidDnsName: 'Nombre inválido: debe comenzar con una letra, solo alfanuméricos y guiones, máx. 63 caracteres',
                 addTag: 'Agregar etiqueta...',
                 invalidTagFormat: 'Formato inválido. Las etiquetas deben ser alfanuméricas en minúsculas (guiones, puntos, guiones bajos permitidos).',
                 deleteError: 'Error de remoción',
@@ -13772,7 +13772,7 @@
 
                 // Common notifications
                 saveFailed: 'Falha ao salvar',
-                invalidDnsName: 'Nome inválido: apenas alfanuméricos e hifens, sem hifens no início/fim, máx. 63 caracteres',
+                invalidDnsName: 'Nome inválido: deve começar com uma letra, apenas alfanuméricos e hifens, máx. 63 caracteres',
                 addTag: 'Adicionar tag...',
                 invalidTagFormat: 'Formato inválido. Tags devem ser alfanuméricos em minúsculas (hifens, pontos, underscores permitidos).',
                 deleteError: 'Erro ao excluir',

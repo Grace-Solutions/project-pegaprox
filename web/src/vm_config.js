@@ -1025,9 +1025,9 @@
                 // Validate VM name format (DNS-compatible)
                 const nameValue = 'name' in changes ? changes.name : ('hostname' in changes ? changes.hostname : undefined);
                 if (nameValue !== undefined && nameValue !== '') {
-                    const dnsRegex = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/;
+                    const dnsRegex = /^[a-zA-Z]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/;
                     if (!dnsRegex.test(nameValue)) {
-                        addToast(t('invalidDnsName') || 'Invalid name: must be alphanumeric with optional hyphens, no leading/trailing hyphens, max 63 characters', 'error');
+                        addToast(t('invalidDnsName') || 'Invalid name: must start with a letter, only alphanumeric and hyphens allowed, max 63 characters', 'error');
                         return;
                     }
                 }
