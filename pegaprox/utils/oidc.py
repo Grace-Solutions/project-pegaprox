@@ -449,11 +449,12 @@ def oidc_map_groups_to_role(config: dict, groups: list, id_token_claims: dict = 
     elif viewer_group and (viewer_group in group_ids or viewer_group in group_names):
         result['role'] = ROLE_VIEWER
     
-    # LW: Custom group mappings (override built-in)
+    # LW: Custom group mappings — pick highest role when user matches multiple groups
+    _role_prio = {ROLE_VIEWER: 0, ROLE_USER: 1, ROLE_ADMIN: 2}
     for mapping in config.get('group_mappings', []):
         map_group = (mapping.get('group_id') or mapping.get('group_dn') or '').strip().lower()
         if map_group and (map_group in group_ids or map_group in group_names):
-            if mapping.get('role'):
+            if mapping.get('role') and _role_prio.get(mapping['role'], 0) > _role_prio.get(result['role'], 0):
                 result['role'] = mapping['role']
             if mapping.get('tenant'):
                 result['tenant'] = mapping['tenant']
