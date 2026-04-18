@@ -598,11 +598,13 @@ def check_hardening(cluster_id, node):
     if not mgr.is_connected:
         return jsonify({'error': 'Cluster offline'}), 503
 
-    result = mgr.check_node_hardening(node)
+    # NS Apr 2026 (#322): verbose mode — returns per-control evidence for audit reports
+    verbose = str(request.args.get('verbose', '')).lower() in ('1', 'true', 'yes')
+    result = mgr.check_node_hardening(node, verbose=verbose)
     if result is None:
         return jsonify({'error': f'SSH to {node} failed'}), 502
 
-    return jsonify({'node': node, 'controls': result})
+    return jsonify({'node': node, 'controls': result, 'verbose': verbose})
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/hardening', methods=['POST'])

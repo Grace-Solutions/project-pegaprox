@@ -2242,7 +2242,7 @@
             const [showAddPBS, setShowAddPBS] = useState(false);
             const [pbsLoading, setPbsLoading] = useState(false);
             const [editingPBS, setEditingPBS] = useState(null); // null = add mode, object = edit mode
-            const [pbsForm, setPbsForm] = useState({ name: '', host: '', port: 8007, user: 'root@pam', password: '', api_token_id: '', api_token_secret: '', fingerprint: '', ssl_verify: false, linked_clusters: [], notes: '' });
+            const [pbsForm, setPbsForm] = useState({ name: '', host: '', port: 8007, user: 'root@pam', password: '', api_token_id: '', api_token_secret: '', fingerprint: '', ssl_verify: false, linked_clusters: [], notes: '', ssh_user: '', ssh_port: 22, ssh_key: '', _showSsh: false });
             const [pbsTestResult, setPbsTestResult] = useState(null);
             const [pbsTestLoading, setPbsTestLoading] = useState(false);
             const [pbsActionLoading, setPbsActionLoading] = useState({});
@@ -2559,6 +2559,9 @@
             const [hardenSelected, setHardenSelected] = useState({});
             const [hardenParams, setHardenParams] = useState({ backup_dns: { dns1: '1.1.1.1', dns2: '9.9.9.9' } });
             const [hardenResults, setHardenResults] = useState(null);
+            // NS Apr 2026 (#322): verbose audit output
+            const [hardenVerbose, setHardenVerbose] = useState(false);
+            const [hardenExpanded, setHardenExpanded] = useState({});  // {ctrl_id: bool}
 
             // Custom Scripts state - MK Jan 2026
             const [customScripts, setCustomScripts] = useState([]);
@@ -4044,20 +4047,23 @@
             };
 
             // CIS hardening check/apply
-            const checkHardening = async (nodeName) => {
+            const checkHardening = async (nodeName, verbose = false) => {
                 if (!selectedCluster?.id || !nodeName) return;
                 setHardenLoading(true);
                 setHardenStatus(null);
                 setHardenResults(null);
                 setHardenSelected({});
                 try {
-                    const resp = await authFetch(`${API_URL}/clusters/${selectedCluster.id}/nodes/${nodeName}/hardening`);
+                    const url = `${API_URL}/clusters/${selectedCluster.id}/nodes/${nodeName}/hardening${verbose ? '?verbose=true' : ''}`;
+                    const resp = await authFetch(url);
                     if (resp && resp.ok) {
                         const data = await resp.json();
                         setHardenStatus(data);
                         // pre-select all controls that are NOT yet applied
                         const sel = {};
-                        Object.entries(data.controls || {}).forEach(([id, applied]) => {
+                        Object.entries(data.controls || {}).forEach(([id, v]) => {
+                            // verbose: v is {status, evidence}, non-verbose: v is bool
+                            const applied = typeof v === 'object' ? v.status : v;
                             if (!applied) sel[id] = true;
                         });
                         setHardenSelected(sel);
@@ -9568,7 +9574,7 @@
                                                         </div>
 
                                                         {/* Node selector */}
-                                                        <div className="flex items-center gap-3">
+                                                        <div className="flex items-center gap-3 flex-wrap">
                                                             <select
                                                                 value={hardenNode}
                                                                 onChange={e => { setHardenNode(e.target.value); setHardenStatus(null); setHardenResults(null); setHardenSelected({}); }}
@@ -9580,7 +9586,7 @@
                                                                 ))}
                                                             </select>
                                                             <button
-                                                                onClick={() => checkHardening(hardenNode)}
+                                                                onClick={() => checkHardening(hardenNode, hardenVerbose)}
                                                                 disabled={!hardenNode || hardenLoading}
                                                                 className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
                                                                     !hardenNode || hardenLoading ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-proxmox-orange hover:bg-orange-600 text-white'
@@ -9588,6 +9594,12 @@
                                                             >
                                                                 {hardenLoading ? <><Icons.RotateCw className="w-4 h-4 animate-spin" /> {t('checking') || 'Checking...'}</> : <><Icons.Shield className="w-4 h-4" /> {t('checkStatus') || 'Check Status'}</>}
                                                             </button>
+                                                            {/* NS Apr 2026 (#322): verbose audit toggle */}
+                                                            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer" title={t('verboseHint') || 'Include raw check output per control — useful for audit reports'}>
+                                                                <input type="checkbox" checked={hardenVerbose} onChange={e => setHardenVerbose(e.target.checked)}
+                                                                    className="w-4 h-4 rounded border-gray-600 bg-proxmox-dark accent-proxmox-orange" />
+                                                                {t('verboseAuditOutput') || 'Verbose audit output'}
+                                                            </label>
                                                         </div>
 
                                                         {hardenLoading && (
@@ -9653,14 +9665,22 @@
                                                                 auditd_service: { ref: 'Audit', title: t('pegaAuditd') || 'Enable Audit Daemon (auditd)', desc: t('pegaAuditdDesc') || 'Installs and enables auditd for system event logging. Pair with STIG "Privileged Command Logging" for comprehensive audit rules.', impact: t('pegaAuditdImpact') || 'Minimal overhead — prerequisite for audit rules' },
                                                             };
                                                             const controls = hardenStatus.controls || {};
-                                                            const appliedCount = Object.values(controls).filter(Boolean).length;
+                                                            // NS Apr 2026: verbose result is {status, evidence, command}, non-verbose is bool
+                                                            const _isApplied = v => typeof v === 'object' ? v?.status === true : v === true;
+                                                            const appliedCount = Object.values(controls).filter(_isApplied).length;
                                                             const totalCount = Object.keys(controls).length;
                                                             const selectedCount = Object.values(hardenSelected).filter(Boolean).length;
 
                                                             // reusable render fn for a single control row
                                                             const renderControl = (id, info, source) => {
-                                                                const applied = controls[id] === true;
+                                                                const ctrlData = controls[id];
+                                                                // verbose: ctrlData is {status, evidence, command}, non-verbose: bool
+                                                                const isVerboseData = ctrlData && typeof ctrlData === 'object';
+                                                                const applied = isVerboseData ? ctrlData.status === true : ctrlData === true;
+                                                                const evidence = isVerboseData ? (ctrlData.evidence || '') : '';
+                                                                const checkCmd = isVerboseData ? (ctrlData.command || '') : '';
                                                                 const failed = hardenResults?.[id]?.success === false;
+                                                                const expanded = !!hardenExpanded[id];
                                                                 return (
                                                                 <div key={id} className={`bg-proxmox-card border rounded-xl overflow-hidden ${applied ? 'border-green-500/30' : 'border-proxmox-border'}`}>
                                                                     <div className="flex items-center gap-3 p-3">
@@ -9699,6 +9719,34 @@
                                                                                     <input type="text" value={hardenParams.backup_dns?.dns2 || '9.9.9.9'}
                                                                                         onChange={e => setHardenParams(p => ({...p, backup_dns: {...p.backup_dns, dns2: e.target.value}}))}
                                                                                         className="w-28 px-2 py-0.5 text-xs bg-proxmox-dark border border-proxmox-border rounded text-white" placeholder="9.9.9.9" />
+                                                                                </div>
+                                                                            )}
+                                                                            {/* NS Apr 2026 (#322): verbose audit evidence — collapsible per-control */}
+                                                                            {isVerboseData && (evidence || checkCmd) && (
+                                                                                <div className="mt-2">
+                                                                                    <button
+                                                                                        onClick={() => setHardenExpanded(prev => ({...prev, [id]: !expanded}))}
+                                                                                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300"
+                                                                                    >
+                                                                                        <Icons.ChevronRight className={`w-3 h-3 transform transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                                                                                        {expanded ? (t('hideAuditDetails') || 'Hide audit details') : (t('showAuditDetails') || 'Show audit details')}
+                                                                                    </button>
+                                                                                    {expanded && (
+                                                                                        <div className="mt-1.5 p-2 bg-black/40 border border-proxmox-border rounded font-mono text-xs space-y-2">
+                                                                                            {checkCmd && (
+                                                                                                <div>
+                                                                                                    <div className="text-gray-500 mb-1">{t('checkCommand') || 'Check command'}:</div>
+                                                                                                    <div className="text-blue-300 whitespace-pre-wrap break-all">{checkCmd}</div>
+                                                                                                </div>
+                                                                                            )}
+                                                                                            {evidence && (
+                                                                                                <div>
+                                                                                                    <div className="text-gray-500 mb-1">{t('actualState') || 'Actual state'}:</div>
+                                                                                                    <div className={`whitespace-pre-wrap break-all ${applied ? 'text-green-300' : 'text-yellow-300'}`}>{evidence}</div>
+                                                                                                </div>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    )}
                                                                                 </div>
                                                                             )}
                                                                         </div>
@@ -11052,7 +11100,7 @@
                                             <div className={isCorporate ? 'corp-toolbar flex items-center gap-1' : 'flex items-center gap-2'}>
                                                 {isAdmin && (
                                                     <>
-                                                        <button onClick={() => { setEditingPBS(selectedPBS); setPbsForm({ name: selectedPBS.name, host: selectedPBS.host, port: selectedPBS.port, user: selectedPBS.user, password: '********', api_token_id: selectedPBS.api_token_id || '', api_token_secret: selectedPBS.using_api_token ? '********' : '', fingerprint: selectedPBS.fingerprint || '', ssl_verify: selectedPBS.ssl_verify || false, linked_clusters: selectedPBS.linked_clusters || [], notes: selectedPBS.notes || '' }); setShowAddPBS(true); }} className={isCorporate ? '' : 'px-3 py-2 rounded-lg bg-proxmox-card border border-proxmox-border text-gray-400 hover:text-white hover:border-blue-500/30 transition-all text-sm flex items-center gap-2'}>
+                                                        <button onClick={() => { setEditingPBS(selectedPBS); setPbsForm({ name: selectedPBS.name, host: selectedPBS.host, port: selectedPBS.port, user: selectedPBS.user, password: '********', api_token_id: selectedPBS.api_token_id || '', api_token_secret: selectedPBS.using_api_token ? '********' : '', fingerprint: selectedPBS.fingerprint || '', ssl_verify: selectedPBS.ssl_verify || false, linked_clusters: selectedPBS.linked_clusters || [], notes: selectedPBS.notes || '', ssh_user: selectedPBS.ssh_user || '', ssh_port: selectedPBS.ssh_port || 22, ssh_key: selectedPBS.has_ssh_key ? '********' : '', _showSsh: !!selectedPBS.ssh_user }); setShowAddPBS(true); }} className={isCorporate ? '' : 'px-3 py-2 rounded-lg bg-proxmox-card border border-proxmox-border text-gray-400 hover:text-white hover:border-blue-500/30 transition-all text-sm flex items-center gap-2'}>
                                                             <Icons.Edit className="w-4 h-4" /> Edit
                                                         </button>
                                                         <button onClick={() => handleDeletePBS(selectedPBS.id)} className={isCorporate ? '' : 'px-3 py-2 rounded-lg bg-proxmox-card border border-proxmox-border text-gray-400 hover:text-red-400 hover:border-red-500/30 transition-all text-sm flex items-center gap-2'}>
@@ -14099,6 +14147,41 @@
                                             <textarea value={pbsForm.notes} onChange={e => setPbsForm(p => ({...p, notes: e.target.value}))} rows={2} placeholder="Optional notes..." className="w-full bg-proxmox-dark border border-proxmox-border rounded-lg p-2.5 text-sm text-white resize-none" />
                                         </div>
 
+                                        {/* NS Apr 2026: SSH settings for running apt-upgrade on PBS host */}
+                                        <div className="pt-3 border-t border-proxmox-border">
+                                            <button type="button" onClick={() => setPbsForm(p => ({...p, _showSsh: !p._showSsh}))}
+                                                className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors">
+                                                <Icons.ChevronRight className={`w-3 h-3 transform transition-transform ${pbsForm._showSsh ? 'rotate-90' : ''}`} />
+                                                SSH (Optional — needed for Update Manager)
+                                            </button>
+                                            {pbsForm._showSsh && (
+                                                <div className="mt-3 space-y-3 p-3 bg-proxmox-dark/50 rounded-lg">
+                                                    <p className="text-xs text-gray-400">
+                                                        SSH is only used for apt dist-upgrade. If blank, PegaProx falls back to the PBS web password. Use a key if password login is disabled.
+                                                    </p>
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        <div>
+                                                            <label className="block text-xs text-gray-400 mb-1">SSH User</label>
+                                                            <input type="text" value={pbsForm.ssh_user || ''} onChange={e => setPbsForm(p => ({...p, ssh_user: e.target.value}))}
+                                                                placeholder="root"
+                                                                className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white text-sm" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs text-gray-400 mb-1">SSH Port</label>
+                                                            <input type="number" value={pbsForm.ssh_port || 22} onChange={e => setPbsForm(p => ({...p, ssh_port: parseInt(e.target.value) || 22}))}
+                                                                className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white text-sm" />
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs text-gray-400 mb-1">SSH Private Key</label>
+                                                        <textarea value={pbsForm.ssh_key || ''} onChange={e => setPbsForm(p => ({...p, ssh_key: e.target.value}))}
+                                                            className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white placeholder-gray-500 font-mono text-xs"
+                                                            placeholder={editingPBS ? "Leave blank to keep existing key" : "-----BEGIN OPENSSH PRIVATE KEY-----"} rows={4} />
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+
                                         {/* Test Result */}
                                         {pbsTestResult && (
                                             <div className={`p-3 rounded-lg text-sm ${pbsTestResult.success ? 'bg-green-500/10 border border-green-500/30 text-green-400' : 'bg-red-500/10 border border-red-500/30 text-red-400'}`}>
@@ -14122,7 +14205,7 @@
                                             Test Connection
                                         </button>
                                         <div className="flex gap-2">
-                                            <button onClick={() => { setShowAddPBS(false); setEditingPBS(null); setPbsTestResult(null); setPbsForm({ name: '', host: '', port: 8007, user: 'root@pam', password: '', api_token_id: '', api_token_secret: '', fingerprint: '', ssl_verify: false, linked_clusters: [], notes: '' }); }} className="px-4 py-2 rounded-lg bg-proxmox-dark text-gray-400 hover:text-white transition-colors text-sm">Cancel</button>
+                                            <button onClick={() => { setShowAddPBS(false); setEditingPBS(null); setPbsTestResult(null); setPbsForm({ name: '', host: '', port: 8007, user: 'root@pam', password: '', api_token_id: '', api_token_secret: '', fingerprint: '', ssl_verify: false, linked_clusters: [], notes: '', ssh_user: '', ssh_port: 22, ssh_key: '', _showSsh: false }); }} className="px-4 py-2 rounded-lg bg-proxmox-dark text-gray-400 hover:text-white transition-colors text-sm">Cancel</button>
                                             <button onClick={async () => {
                                                 if (!pbsForm.name || !pbsForm.host) { addToast('Name and host are required', 'error'); return; }
                                                 if (!pbsForm.api_token_id && !pbsForm.password) { addToast('Provide password or API token', 'error'); return; }
@@ -14134,7 +14217,7 @@
                                                 }
                                                 if (result?.success) {
                                                     setShowAddPBS(false); setEditingPBS(null); setPbsTestResult(null);
-                                                    setPbsForm({ name: '', host: '', port: 8007, user: 'root@pam', password: '', api_token_id: '', api_token_secret: '', fingerprint: '', ssl_verify: false, linked_clusters: [], notes: '' });
+                                                    setPbsForm({ name: '', host: '', port: 8007, user: 'root@pam', password: '', api_token_id: '', api_token_secret: '', fingerprint: '', ssl_verify: false, linked_clusters: [], notes: '', ssh_user: '', ssh_port: 22, ssh_key: '', _showSsh: false });
                                                 } else if (result?.error) {
                                                     addToast(result.error, 'error');
                                                 }

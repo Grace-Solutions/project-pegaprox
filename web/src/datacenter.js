@@ -4840,19 +4840,31 @@
                                                 {/* Target node */}
                                                 <div>
                                                     <label className="block text-sm text-gray-400 mb-1">{t('targetNode') || 'Target Node'}</label>
-                                                    <select
-                                                        value={newReplication.target}
-                                                        onChange={e => setNewReplication({...newReplication, target: e.target.value})}
-                                                        className="w-full bg-proxmox-dark border border-proxmox-border rounded-lg px-3 py-2 text-sm"
-                                                    >
-                                                        <option value="">{t('selectNode') || '-- Select Node --'}</option>
-                                                        {clusterNodes.filter(n => {
-                                                            const selectedVm = replVms.find(v => String(v.vmid) === String(newReplication.vmid));
-                                                            return selectedVm ? n.name !== selectedVm.node : true;
-                                                        }).map(n => (
-                                                            <option key={n.name} value={n.name}>{n.name}</option>
-                                                        ))}
-                                                    </select>
+                                                    {(() => {
+                                                        const selectedVm = replVms.find(v => String(v.vmid) === String(newReplication.vmid));
+                                                        const otherNodes = clusterNodes.filter(n => selectedVm ? n.name !== selectedVm.node : true);
+                                                        // LW Apr 2026 - #320: if the only node is the source node, user probably
+                                                        // wants cross-cluster replication — point them at the right UI
+                                                        if (newReplication.vmid && otherNodes.length === 0) {
+                                                            return (
+                                                                <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs p-2 rounded">
+                                                                    {t('noOtherNodeForRepl') || 'No other node available in this cluster. For replication across clusters, open the VM → Configure → Replication → Cross-Cluster tab.'}
+                                                                </div>
+                                                            );
+                                                        }
+                                                        return (
+                                                            <select
+                                                                value={newReplication.target}
+                                                                onChange={e => setNewReplication({...newReplication, target: e.target.value})}
+                                                                className="w-full bg-proxmox-dark border border-proxmox-border rounded-lg px-3 py-2 text-sm"
+                                                            >
+                                                                <option value="">{t('selectNode') || '-- Select Node --'}</option>
+                                                                {otherNodes.map(n => (
+                                                                    <option key={n.name} value={n.name}>{n.name}</option>
+                                                                ))}
+                                                            </select>
+                                                        );
+                                                    })()}
                                                 </div>
                                                 {/* Target storage - only for snapshot mode */}
                                                 {replType === 'snapshot' && (

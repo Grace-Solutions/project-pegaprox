@@ -10,6 +10,7 @@ registering blueprints after the first request — plugins can be loaded at runt
 
 import json
 import sys
+import threading
 import logging
 import importlib.util
 from pathlib import Path
@@ -25,7 +26,10 @@ from pegaprox.utils.audit import log_audit
 
 bp = Blueprint('plugins', __name__)
 
-# in-memory registries
+# in-memory registries — guarded by _plugin_lock to prevent
+# "dictionary changed size during iteration" crashes that made plugins
+# appear to vanish under load (several users reported this).
+_plugin_lock = threading.RLock()
 _loaded_plugins = {}   # {plugin_id: module}
 _plugin_routes = {}    # {plugin_id: {path: handler_fn}}
 
@@ -33,14 +37,9 @@ _plugin_routes = {}    # {plugin_id: {path: handler_fn}}
 # ---- Plugin Route Registration (used by plugins) ----
 
 def register_plugin_route(plugin_id, path, handler):
-    """Register a route handler for a plugin. Called from plugin's register() function.
-
-    Usage in plugin __init__.py:
-        from pegaprox.api.plugins import register_plugin_route
-        def register(app):
-            register_plugin_route('my_plugin', 'status', my_handler)
-    """
-    _plugin_routes.setdefault(plugin_id, {})[path] = handler
+    """Register a route handler for a plugin. Called from plugin's register() function."""
+    with _plugin_lock:
+        _plugin_routes.setdefault(plugin_id, {})[path] = handler
 
 
 # ---- Catch-all route for plugin API calls ----
@@ -49,11 +48,11 @@ def register_plugin_route(plugin_id, path, handler):
 @require_auth(perms=['plugins.view'])
 def plugin_proxy(plugin_id, subpath):
     """Dispatch API requests to loaded plugins"""
-    if plugin_id not in _loaded_plugins:
-        return jsonify({'error': 'Plugin not loaded'}), 404
+    with _plugin_lock:
+        if plugin_id not in _loaded_plugins:
+            return jsonify({'error': 'Plugin not loaded'}), 404
+        handler = _plugin_routes.get(plugin_id, {}).get(subpath)
 
-    routes = _plugin_routes.get(plugin_id, {})
-    handler = routes.get(subpath)
     if not handler:
         return jsonify({'error': f'Route not found: {subpath}'}), 404
 
@@ -122,7 +121,13 @@ def _set_plugin_state(plugin_id, enabled, error=''):
 def load_plugin(app, plugin_id):
     """Load a plugin module and call its register() function
     WARNING: Plugins execute arbitrary Python with full process privileges.
-    Only load plugins from trusted sources. There is no sandbox."""
+    Only load plugins from trusted sources. There is no sandbox.
+    NS Apr 2026: idempotent — if already loaded, return success without re-registering."""
+    # idempotency — re-enable clicks used to double-register routes
+    with _plugin_lock:
+        if plugin_id in _loaded_plugins:
+            return True, ''
+
     plugin_dir = Path(PLUGINS_DIR) / plugin_id
     init_file = plugin_dir / '__init__.py'
 
@@ -158,12 +163,18 @@ def load_plugin(app, plugin_id):
         if hasattr(mod, 'register'):
             mod.register(app)
 
-        _loaded_plugins[plugin_id] = mod
+        with _plugin_lock:
+            _loaded_plugins[plugin_id] = mod
         logging.info(f"[PLUGINS] Loaded: {plugin_id}")
         return True, ''
 
     except Exception as e:
         logging.error(f"[PLUGINS] Failed to load {plugin_id}: {e}")
+        # roll back partial state — a register() that half-succeeded can leave
+        # stale routes referencing a module we're about to drop
+        with _plugin_lock:
+            _plugin_routes.pop(plugin_id, None)
+            _loaded_plugins.pop(plugin_id, None)
         if f'plugins.{plugin_id}' in sys.modules:
             del sys.modules[f'plugins.{plugin_id}']
         return False, str(e)
@@ -171,8 +182,9 @@ def load_plugin(app, plugin_id):
 
 def unload_plugin(plugin_id):
     """Unload a plugin — remove routes and module"""
-    _plugin_routes.pop(plugin_id, None)
-    _loaded_plugins.pop(plugin_id, None)
+    with _plugin_lock:
+        _plugin_routes.pop(plugin_id, None)
+        _loaded_plugins.pop(plugin_id, None)
     mod_name = f'plugins.{plugin_id}'
     if mod_name in sys.modules:
         del sys.modules[mod_name]
@@ -192,7 +204,10 @@ def load_enabled_plugins(app):
             ok, err = load_plugin(app, pid)
             if ok:
                 loaded.append(plugin.get('name', pid))
+                # clear any old error from the DB
+                _set_plugin_state(pid, True, error='')
             else:
+                # keep enabled flag so user still sees the intent, record error for UI
                 _set_plugin_state(pid, True, error=err)
 
     if loaded:
@@ -200,7 +215,10 @@ def load_enabled_plugins(app):
 
 
 def start_plugin_backgrounds():
-    for pid, mod in _loaded_plugins.items():
+    # snapshot under lock to avoid "dictionary changed size during iteration"
+    with _plugin_lock:
+        plugins_snapshot = list(_loaded_plugins.items())
+    for pid, mod in plugins_snapshot:
         if hasattr(mod, 'start_background_tasks'):
             try:
                 mod.start_background_tasks()
@@ -219,11 +237,14 @@ def list_plugins():
     states = _get_plugin_states()
 
     result = []
+    # snapshot the registries so the list is consistent even if enable/disable runs mid-request
+    with _plugin_lock:
+        loaded_snapshot = set(_loaded_plugins.keys())
+        routes_snapshot = {k: list(v.keys()) for k, v in _plugin_routes.items()}
+
     for plugin in discovered:
         pid = plugin['_id']
         state = states.get(pid, {})
-        # get registered routes for this plugin
-        routes = list(_plugin_routes.get(pid, {}).keys())
         result.append({
             'id': pid,
             'name': plugin.get('name', pid),
@@ -231,14 +252,39 @@ def list_plugins():
             'author': plugin.get('author', ''),
             'description': plugin.get('description', ''),
             'enabled': bool(state.get('enabled', 0)),
-            'loaded': pid in _loaded_plugins,
+            'loaded': pid in loaded_snapshot,
             'error': state.get('error', '') or plugin.get('error', ''),
             'has_init': plugin.get('_has_init', False),
-            'routes': routes,
+            'routes': routes_snapshot.get(pid, []),
             'trusted': plugin.get('author', '').startswith('PegaProx'),
         })
 
     return jsonify(result)
+
+
+@bp.route('/api/plugins/<plugin_id>/reload', methods=['POST'])
+@require_auth(perms=['plugins.manage'])
+def reload_plugin(plugin_id):
+    """Force-reload a plugin (unload + load). Helps when a plugin crashed
+    and the user wants to retry without a full server restart."""
+    plugins_path = Path(PLUGINS_DIR) / plugin_id
+    if not plugins_path.exists() or not (plugins_path / 'manifest.json').exists():
+        return jsonify({'error': 'Plugin not found'}), 404
+
+    unload_plugin(plugin_id)
+    ok, err = load_plugin(current_app._get_current_object(), plugin_id)
+    _set_plugin_state(plugin_id, True, error=err)
+
+    usr = getattr(request, 'session', {}).get('user', 'system')
+    log_audit(usr, 'plugins.reloaded', f"Reloaded plugin: {plugin_id}")
+
+    if ok:
+        mod = _loaded_plugins.get(plugin_id)
+        if mod and hasattr(mod, 'start_background_tasks'):
+            try: mod.start_background_tasks()
+            except Exception: pass
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': err}), 500
 
 
 @bp.route('/api/plugins/<plugin_id>/enable', methods=['POST'])

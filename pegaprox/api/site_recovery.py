@@ -399,10 +399,18 @@ def execute_planned_failover(plan_id):
     if not vms:
         return jsonify({'error': 'No VMs in plan'}), 400
 
-    # NS: set status BEFORE spawning greenlet to avoid race condition
+    # NS Apr 2026: atomic ready->running transition. UPDATE..WHERE status='ready' only
+    # changes the row if no one else flipped it first (e.g. auto-failover heartbeat racing).
     db = get_db()
     now = datetime.utcnow().isoformat()
-    db.execute("UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ?", (now, plan_id))
+    cur = db.conn.cursor()
+    cur.execute(
+        "UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ? AND status = 'ready'",
+        (now, plan_id)
+    )
+    db.conn.commit()
+    if cur.rowcount != 1:
+        return jsonify({'error': 'Plan state changed — concurrent failover may be in progress'}), 409
 
     from pegaprox.background.site_recovery import execute_failover
     _safe_spawn_failover(execute_failover, plan_id, 'planned')
@@ -431,9 +439,17 @@ def execute_emergency_failover(plan_id):
     if not vms:
         return jsonify({'error': 'No VMs in plan'}), 400
 
+    # atomic ready->running transition (same race protection as planned failover)
     db = get_db()
     now = datetime.utcnow().isoformat()
-    db.execute("UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ?", (now, plan_id))
+    cur = db.conn.cursor()
+    cur.execute(
+        "UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ? AND status = 'ready'",
+        (now, plan_id)
+    )
+    db.conn.commit()
+    if cur.rowcount != 1:
+        return jsonify({'error': 'Plan state changed — concurrent failover may be in progress'}), 409
 
     from pegaprox.background.site_recovery import execute_failover
     _safe_spawn_failover(execute_failover, plan_id, 'emergency')

@@ -1957,6 +1957,10 @@
             const [updatingNode, setUpdatingNode] = useState(null);
             const [showNodeUpdateConfirm, setShowNodeUpdateConfirm] = useState(null);
             const [nodeReboot, setNodeReboot] = useState(true);
+            // NS Apr 2026: PBS update state
+            const [showPbsUpdateConfirm, setShowPbsUpdateConfirm] = useState(null);
+            const [pbsUpdateReboot, setPbsUpdateReboot] = useState(false);
+            const [pbsUpdateStatus, setPbsUpdateStatus] = useState({});  // {pbs_id: {status, phase, output_lines, ...}}
             
             // NS: Auto-Update Scheduling
             const [showScheduleModal, setShowScheduleModal] = useState(false);
@@ -2172,6 +2176,29 @@
             useEffect(() => {
                 loadUpdateSchedule();
             }, [clusterId]);
+
+            // NS Apr 2026: poll PBS update status for any PBS visible in updateStatus
+            useEffect(() => {
+                if (!updateStatus?.pbs) return;
+                const pbsIds = Object.values(updateStatus.pbs).map(p => p.pbs_id).filter(Boolean);
+                if (pbsIds.length === 0) return;
+                let cancelled = false;
+                const poll = async () => {
+                    const next = {};
+                    for (const pid of pbsIds) {
+                        try {
+                            const r = await fetch(`${API_URL}/pbs/${pid}/update`, {
+                                credentials: 'include', headers: getAuthHeaders()
+                            });
+                            if (r?.ok) next[pid] = await r.json();
+                        } catch (e) { /* ignore */ }
+                    }
+                    if (!cancelled) setPbsUpdateStatus(next);
+                };
+                poll();
+                const iv = setInterval(poll, 5000);
+                return () => { cancelled = true; clearInterval(iv); };
+            }, [updateStatus?.pbs ? Object.keys(updateStatus.pbs).length : 0]);
 
             // Get rolling update status
             const getRollingStatus = async () => {
@@ -2600,20 +2627,30 @@
                                 </div>
                             )}
 
-                            {/* PBS Server Updates - MK Apr 2026 (#240) */}
+                            {/* PBS Server Updates - MK Apr 2026 (#240), upgrade execution NS Apr 2026 */}
                             {updateStatus?.pbs && Object.keys(updateStatus.pbs).length > 0 && (
                                 <div className="space-y-2 mt-4">
                                     <h4 className="text-sm font-medium text-gray-400 flex items-center gap-2">
                                         <Icons.Shield className="w-4 h-4" />
                                         Proxmox Backup Server
                                     </h4>
-                                    {Object.entries(updateStatus.pbs).map(([pbsName, pbsData]) => (
+                                    {Object.entries(updateStatus.pbs).map(([pbsName, pbsData]) => {
+                                        const pbsKey = `pbs_${pbsName}`;
+                                        const pbsJob = pbsUpdateStatus[pbsData.pbs_id];
+                                        const isUpdating = pbsJob && ['starting','updating','rebooting','waiting_online'].includes(pbsJob.status);
+                                        return (
                                         <div key={pbsName} className="bg-proxmox-dark rounded-lg border border-proxmox-border overflow-hidden">
                                             <div className="p-3 flex items-center justify-between cursor-pointer hover:bg-proxmox-hover/30"
-                                                onClick={() => setSelectedNode(selectedNode === `pbs_${pbsName}` ? null : `pbs_${pbsName}`)}>
+                                                onClick={() => setSelectedNode(selectedNode === pbsKey ? null : pbsKey)}>
                                                 <div className="flex items-center gap-3">
                                                     <Icons.Shield className="w-4 h-4 text-blue-400" />
                                                     <span className="text-sm font-medium text-white">{pbsName}</span>
+                                                    {isUpdating && (
+                                                        <span className="flex items-center gap-1 text-blue-400 text-xs">
+                                                            <div className="animate-spin w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full"></div>
+                                                            {pbsJob.phase || pbsJob.status}
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="flex items-center gap-2">
                                                     <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -2622,30 +2659,92 @@
                                                     }`}>
                                                         {!pbsData.success ? '⚠ Check failed' : `${pbsData.count || 0} updates`}
                                                     </span>
-                                                    <Icons.ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${selectedNode === `pbs_${pbsName}` ? 'rotate-180' : ''}`} />
+                                                    <Icons.ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${selectedNode === pbsKey ? 'rotate-180' : ''}`} />
                                                 </div>
                                             </div>
-                                            {selectedNode === `pbs_${pbsName}` && pbsData.count > 0 && (
+                                            {selectedNode === pbsKey && (
                                                 <div className="border-t border-proxmox-border">
-                                                    <div className="max-h-48 overflow-y-auto">
-                                                        <table className="w-full text-xs">
-                                                            <thead><tr className="text-gray-500 border-b border-proxmox-border">
-                                                                <th className="text-left p-2">Package</th><th className="text-left p-2">Version</th>
-                                                            </tr></thead>
-                                                            <tbody>
-                                                                {(pbsData.updates || []).map((pkg, i) => (
-                                                                    <tr key={i} className="border-b border-proxmox-border/50">
-                                                                        <td className="p-2 text-white">{pkg.Package || pkg.package || '-'}</td>
-                                                                        <td className="p-2 text-gray-400">{pkg.Version || pkg.version || '-'}</td>
-                                                                    </tr>
-                                                                ))}
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
+                                                    {isAdmin && pbsData.count > 0 && !isUpdating && (
+                                                        <div className="p-3 bg-proxmox-darker border-b border-proxmox-border flex items-center gap-2">
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); setShowPbsUpdateConfirm({id: pbsData.pbs_id, name: pbsName, count: pbsData.count}); }}
+                                                                className="px-3 py-1.5 bg-proxmox-orange hover:bg-orange-600 rounded text-white text-xs font-medium transition-colors flex items-center gap-1"
+                                                            >
+                                                                <Icons.Download className="w-3 h-3" />
+                                                                {t('updatePbsServer') || 'Update this PBS Server'}
+                                                            </button>
+                                                            <span className="text-xs text-gray-500">SSH-based apt dist-upgrade</span>
+                                                        </div>
+                                                    )}
+                                                    {pbsJob && (pbsJob.output_lines || []).length > 0 && (
+                                                        <div className="p-3 bg-black/50 max-h-48 overflow-y-auto font-mono text-xs">
+                                                            {(pbsJob.output_lines || []).map((line, i) => (
+                                                                <div key={i} className={`${line.includes('[ERROR]') ? 'text-red-400' : line.includes('[OK]') ? 'text-green-400' : 'text-gray-300'}`}>{line}</div>
+                                                            ))}
+                                                            {pbsJob.error && <div className="text-red-400 mt-2">⚠ {pbsJob.error}</div>}
+                                                        </div>
+                                                    )}
+                                                    {pbsData.count > 0 && (
+                                                        <div className="max-h-48 overflow-y-auto">
+                                                            <table className="w-full text-xs">
+                                                                <thead><tr className="text-gray-500 border-b border-proxmox-border">
+                                                                    <th className="text-left p-2">Package</th><th className="text-left p-2">Version</th>
+                                                                </tr></thead>
+                                                                <tbody>
+                                                                    {(pbsData.updates || []).map((pkg, i) => (
+                                                                        <tr key={i} className="border-b border-proxmox-border/50">
+                                                                            <td className="p-2 text-white">{pkg.Package || pkg.package || '-'}</td>
+                                                                            <td className="p-2 text-gray-400">{pkg.Version || pkg.version || '-'}</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
-                                    ))}
+                                    );
+                                    })}
+                                </div>
+                            )}
+
+                            {/* NS: PBS update confirm + trigger */}
+                            {showPbsUpdateConfirm && (
+                                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop" onClick={() => setShowPbsUpdateConfirm(null)}>
+                                    <div className="bg-proxmox-card border border-proxmox-border rounded-xl p-5 max-w-md w-full" onClick={e => e.stopPropagation()}>
+                                        <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+                                            <Icons.Download />
+                                            {t('updatePbsServer') || 'Update PBS'}: {showPbsUpdateConfirm.name}
+                                        </h3>
+                                        <p className="text-sm text-gray-400 mb-3">{showPbsUpdateConfirm.count} {t('updates') || 'updates'} {t('willBeInstalled') || 'will be installed via SSH + apt dist-upgrade.'}</p>
+                                        <label className="flex items-center gap-2 text-sm text-gray-300 mb-4">
+                                            <input type="checkbox" checked={pbsUpdateReboot} onChange={e => setPbsUpdateReboot(e.target.checked)} className="rounded" />
+                                            {t('rebootAfter') || 'Reboot after update'}
+                                        </label>
+                                        <div className="flex gap-2 justify-end">
+                                            <button onClick={() => setShowPbsUpdateConfirm(null)} className="px-3 py-1.5 text-gray-400 hover:text-white text-sm">{t('cancel') || 'Cancel'}</button>
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        const r = await fetch(`${API_URL}/pbs/${showPbsUpdateConfirm.id}/update`, {
+                                                            method: 'POST',
+                                                            credentials: 'include',
+                                                            headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+                                                            body: JSON.stringify({reboot: pbsUpdateReboot})
+                                                        });
+                                                        if (r?.ok) addToast('PBS update started', 'success');
+                                                        else {
+                                                            const err = await r?.json().catch(() => ({}));
+                                                            addToast(err.error || 'Failed to start update', 'error');
+                                                        }
+                                                    } catch(e) { addToast('Connection error', 'error'); }
+                                                    setShowPbsUpdateConfirm(null);
+                                                }}
+                                                className="px-3 py-1.5 bg-proxmox-orange hover:bg-orange-600 rounded text-white text-sm flex items-center gap-1"
+                                            ><Icons.Download className="w-3 h-3" />{t('startUpdate') || 'Start Update'}</button>
+                                        </div>
+                                    </div>
                                 </div>
                             )}
 

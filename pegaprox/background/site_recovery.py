@@ -177,27 +177,38 @@ def _migrate_vm_cross_cluster(src_mgr, tgt_mgr, vmid, vm_type, storage_map, net_
 def _start_replicated_vm(tgt_mgr, vmid, vm_type='qemu'):
     """Start a replicated VM on target (emergency failover).
     The VM should already exist on target from replication.
-    Returns (success, error)"""
+    Returns (success, error)
+    NS Apr 2026: was calling non-existent start_vm() — use vm_action('start')
+    Also check cluster/resources directly instead of per-node get_vms (faster + reliable)"""
     try:
-        # find which node the replicated VM is on
-        node_status = tgt_mgr.get_node_status()
-        if not node_status:
-            return False, "Cannot get target node status"
+        # find target node for the VM via cluster resources (one call vs N)
+        try:
+            res = tgt_mgr._api_get(
+                f"https://{tgt_mgr.host}:8006/api2/json/cluster/resources",
+                params={'type': 'vm'}
+            )
+            if res.status_code != 200:
+                return False, f"Cannot list target VMs (HTTP {res.status_code})"
+            target_node = None
+            current_status = None
+            for r in res.json().get('data', []):
+                if int(r.get('vmid', 0)) == int(vmid):
+                    target_node = r.get('node')
+                    current_status = r.get('status')
+                    break
+            if not target_node:
+                return False, f"VM {vmid} not found on target cluster (not replicated?)"
+        except Exception as e:
+            return False, f"Failed to locate target VM: {e}"
 
-        for node_name in node_status:
-            try:
-                vms = tgt_mgr.get_vms(node_name) if hasattr(tgt_mgr, 'get_vms') else []
-                for v in vms:
-                    if v.get('vmid') == vmid:
-                        # found it, start it
-                        result = tgt_mgr.start_vm(node_name, vmid, vm_type)
-                        if result:
-                            return True, ''
-                        return False, f"start_vm returned falsy for {vmid}"
-            except Exception as e:
-                continue
+        # if already running (e.g. from previous failover), treat as success
+        if current_status == 'running':
+            return True, ''
 
-        return False, f"VM {vmid} not found on target cluster"
+        result = tgt_mgr.vm_action(target_node, int(vmid), vm_type, 'start')
+        if result.get('success'):
+            return True, ''
+        return False, result.get('error', 'start failed')
     except Exception as e:
         return False, str(e)
 
@@ -338,12 +349,20 @@ def execute_test_failover(plan_id):
                             vtype = vm.get('vm_type', 'qemu')
                             clone_result = tgt_mgr.clone_vm(node_name, vmid, vtype,
                                                             newid=test_vmid, name=f"SR-TEST-{vm_name}")
-                            if clone_result:
+                            # clone_vm returns dict {success, error, task?} OR truthy legacy value
+                            clone_ok = clone_result.get('success') if isinstance(clone_result, dict) else bool(clone_result)
+                            if clone_ok:
                                 test_vmids.append({'vmid': test_vmid, 'vm_type': vtype})
-                                tgt_mgr.start_vm(node_name, test_vmid, vtype)
-                                results[str(vmid)] = {'success': True, 'test_vmid': test_vmid}
+                                # NS Apr 2026: was start_vm() which doesn't exist — use vm_action
+                                start_res = tgt_mgr.vm_action(node_name, test_vmid, vtype, 'start')
+                                if start_res.get('success'):
+                                    results[str(vmid)] = {'success': True, 'test_vmid': test_vmid}
+                                else:
+                                    results[str(vmid)] = {'success': False, 'test_vmid': test_vmid,
+                                                          'error': f"cloned OK but start failed: {start_res.get('error', 'unknown')}"}
                             else:
-                                results[str(vmid)] = {'success': False, 'error': 'Clone failed'}
+                                err = clone_result.get('error', 'Clone failed') if isinstance(clone_result, dict) else 'Clone failed'
+                                results[str(vmid)] = {'success': False, 'error': err}
                             found = True
                             break
                 except Exception as e:
@@ -410,14 +429,33 @@ def cleanup_test(plan_id):
             test_vmid = entry
             vtype = 'qemu'
         try:
-            node_status = tgt_mgr.get_node_status() or {}
-            for node_name in node_status:
+            # NS Apr 2026: locate test VM via cluster resources (was iterating all nodes)
+            try:
+                res = tgt_mgr._api_get(
+                    f"https://{tgt_mgr.host}:8006/api2/json/cluster/resources",
+                    params={'type': 'vm'}
+                )
+                target_node = None
+                current_status = None
+                if res.status_code == 200:
+                    for r in res.json().get('data', []):
+                        if int(r.get('vmid', 0)) == int(test_vmid):
+                            target_node = r.get('node')
+                            current_status = r.get('status')
+                            break
+            except Exception:
+                target_node = None
+                current_status = None
+
+            if target_node:
                 try:
-                    tgt_mgr.stop_vm(node_name, test_vmid, vtype)
-                    time.sleep(3)
-                    tgt_mgr.delete_vm(node_name, test_vmid, vtype, purge=True)
+                    # NS: was stop_vm/delete_vm — use vm_action; ignore "already stopped" errors
+                    if current_status == 'running':
+                        tgt_mgr.vm_action(target_node, test_vmid, vtype, 'stop', force=True)
+                        time.sleep(3)
+                    tgt_mgr.delete_vm(target_node, test_vmid, vtype, purge=True)
                     logger.info(f"[SR] Cleaned up test VM {test_vmid}")
-                    break
+                    continue  # go to next test_vmid entry
                 except Exception:
                     continue
         except Exception as e:
@@ -473,18 +511,53 @@ def _heartbeat_check():
         timeout = plan.get('failover_timeout', 120)
 
         if elapsed >= timeout:
+            # NS Apr 2026: before auto-failover, verify every VM in plan has a healthy recent
+            # replication. Otherwise we'd start VMs that were never copied, or worse, stale copies.
+            vms = db.query("SELECT * FROM site_recovery_vms WHERE plan_id = ?", (plan_id,))
+            blockers = []
+            for vm_row in vms:
+                vm = dict(vm_row)
+                repl_id = (vm.get('replication_job_id') or '').strip()
+                if not repl_id:
+                    blockers.append(f"VM {vm['vmid']} has no replication job linked")
+                    continue
+                repl = db.query_one(
+                    "SELECT enabled, last_status, last_run FROM cross_cluster_replications WHERE id = ?",
+                    (repl_id,)
+                )
+                if not repl:
+                    blockers.append(f"VM {vm['vmid']}: replication job {repl_id} not found")
+                elif not repl['enabled']:
+                    blockers.append(f"VM {vm['vmid']}: replication disabled")
+                elif repl['last_status'] != 'ok':
+                    blockers.append(f"VM {vm['vmid']}: last replication status={repl['last_status'] or 'never ran'}")
+
+            if blockers:
+                logger.error(f"[SR] BLOCKING auto-failover for '{plan['name']}' — replication unhealthy: {'; '.join(blockers[:5])}")
+                log_audit('system', 'site_recovery.auto_failover_blocked',
+                          f"Auto-failover BLOCKED for '{plan['name']}': {'; '.join(blockers[:5])}")
+                _last_fail_times.pop(plan_id, None)
+                _cooldowns[plan_id] = now + 600  # shorter cooldown — admin may fix replication
+                continue
+
             logger.error(f"[SR] AUTO-FAILOVER triggered for '{plan['name']}' after {int(elapsed)}s")
             _last_fail_times.pop(plan_id, None)
             _cooldowns[plan_id] = now + 3600  # 1h cooldown
 
-            # trigger emergency failover — double-check status to avoid race
+            # trigger emergency failover — atomic status transition via WHERE status='ready'
             try:
                 import gevent
-                fresh = db.query_one("SELECT status FROM site_recovery_plans WHERE id = ?", (plan_id,))
-                if fresh and fresh['status'] != 'ready':
+                now_iso = datetime.utcnow().isoformat()
+                # UPDATE .. WHERE status='ready' means we only proceed if noone else flipped it first
+                cur = db.conn.cursor()
+                cur.execute(
+                    "UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ? AND status = 'ready'",
+                    (now_iso, plan_id)
+                )
+                db.conn.commit()
+                if cur.rowcount != 1:
+                    logger.info(f"[SR] Auto-failover for '{plan['name']}' skipped — status changed concurrently")
                     continue
-                db.execute("UPDATE site_recovery_plans SET status = 'running', updated_at = ? WHERE id = ?",
-                           (datetime.utcnow().isoformat(), plan_id))
                 # NS: use crash-safe wrapper so a greenlet crash sets status to 'failed'
                 from pegaprox.api.site_recovery import _safe_spawn_failover
                 _safe_spawn_failover(execute_failover, plan_id, 'emergency')

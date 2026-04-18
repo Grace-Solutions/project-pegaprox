@@ -110,11 +110,13 @@ def update_pbs_server(pbs_id):
     # Recreate manager with new config
     if pbs_id in pbs_managers:
         old_mgr = pbs_managers[pbs_id]
-        # Preserve password if masked
+        # Preserve credentials if masked
         if data.get('password') == '********':
             data['password'] = old_mgr.password
         if data.get('api_token_secret') == '********':
             data['api_token_secret'] = old_mgr.api_token_secret
+        if data.get('ssh_key') == '********':
+            data['ssh_key'] = getattr(old_mgr, 'ssh_key', '')
     
     mgr = PBSManager(pbs_id, data)
     if data.get('enabled', True):
@@ -257,6 +259,62 @@ def refresh_pbs_apt(pbs_id):
     if 'error' in result:
         return jsonify({'error': result['error']}), 500
     return jsonify({'success': True, 'data': result.get('data')})
+
+
+# NS Apr 2026: actually execute apt dist-upgrade via SSH. PBS API has no upgrade endpoint.
+@bp.route('/api/pbs/<pbs_id>/update', methods=['POST'])
+@require_auth(perms=['admin.settings'])
+def start_pbs_update(pbs_id):
+    """Start apt-get dist-upgrade on PBS host via SSH"""
+    if pbs_id not in pbs_managers:
+        return jsonify({'error': 'PBS server not found'}), 404
+    mgr = pbs_managers[pbs_id]
+    data = request.get_json(silent=True) or {}
+    reboot = bool(data.get('reboot', False))
+
+    existing = mgr.get_update_status()
+    if existing and existing.status in ('starting', 'updating', 'rebooting', 'waiting_online'):
+        return jsonify({'error': 'Update already in progress', 'status': existing.status}), 409
+
+    task = mgr.start_update(reboot=reboot)
+    if not task:
+        return jsonify({'error': 'Could not start update'}), 500
+    log_audit(request.session.get('user', 'admin'), 'pbs.update_started',
+              f"Started apt upgrade on PBS {mgr.name}" + (' (with reboot)' if reboot else ''))
+    return jsonify({'success': True, 'status': task.status, 'phase': task.phase})
+
+
+@bp.route('/api/pbs/<pbs_id>/update', methods=['GET'])
+@require_auth(perms=['pbs.view'])
+def get_pbs_update_status(pbs_id):
+    """Get current PBS update status"""
+    if pbs_id not in pbs_managers:
+        return jsonify({'error': 'PBS server not found'}), 404
+    mgr = pbs_managers[pbs_id]
+    task = mgr.get_update_status()
+    if not task:
+        return jsonify({'is_updating': False})
+    return jsonify({
+        'is_updating': task.status in ('starting', 'updating', 'rebooting', 'waiting_online'),
+        'status': task.status,
+        'phase': task.phase,
+        'error': task.error,
+        'output_lines': task.output_lines[-50:] if hasattr(task, 'output_lines') else [],
+        'packages_upgraded': getattr(task, 'packages_upgraded', 0),
+        'reboot': getattr(task, 'reboot', False),
+        'started_at': task.started_at.isoformat() if getattr(task, 'started_at', None) else None,
+        'completed_at': task.completed_at.isoformat() if getattr(task, 'completed_at', None) else None,
+    })
+
+
+@bp.route('/api/pbs/<pbs_id>/update', methods=['DELETE'])
+@require_auth(perms=['admin.settings'])
+def clear_pbs_update_status(pbs_id):
+    """Clear completed/failed update status"""
+    if pbs_id not in pbs_managers:
+        return jsonify({'error': 'PBS server not found'}), 404
+    ok = pbs_managers[pbs_id].clear_update_status()
+    return jsonify({'cleared': ok})
 
 
 @bp.route('/api/pbs/<pbs_id>/datastores', methods=['GET'])

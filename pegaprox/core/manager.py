@@ -12256,6 +12256,7 @@ echo "AGENT_INSTALLED_OK"
     CIS_CHECKS = {
         'fs_modules': {
             'check': "[ -f /etc/modprobe.d/cis-disable-modules.conf ] && echo OK || echo FAIL",
+            'verbose_check': """if [ -f /etc/modprobe.d/cis-disable-modules.conf ]; then echo "file exists: $(wc -l < /etc/modprobe.d/cis-disable-modules.conf) lines"; grep -c '^blacklist\\|^install' /etc/modprobe.d/cis-disable-modules.conf | awk '{print \"blacklisted modules: \"$1}' ; else echo "file missing: /etc/modprobe.d/cis-disable-modules.conf"; fi""",
             'apply': """cat > /etc/modprobe.d/cis-disable-modules.conf << 'MODEOF'
 # CIS 1.1.1 & 3.2: Disable unused kernel modules
 install cramfs /bin/false
@@ -12346,6 +12347,7 @@ echo DONE""",
         },
         'ssh_perms': {
             'check': """[ "$(stat -c '%a' /etc/ssh/sshd_config 2>/dev/null)" = "600" ] && echo OK || echo FAIL""",
+            'verbose_check': """stat -c 'sshd_config: mode=%a owner=%U:%G' /etc/ssh/sshd_config 2>/dev/null ; for f in /etc/ssh/ssh_host_*_key ; do [ -f "$f" ] && stat -c '%n: mode=%a owner=%U:%G' "$f" ; done""",
             'apply': """chmod 600 /etc/ssh/sshd_config
 chown root:root /etc/ssh/sshd_config
 chmod 600 /etc/ssh/ssh_host_*_key 2>/dev/null
@@ -12356,6 +12358,7 @@ echo DONE""",
         },
         'ssh_crypto': {
             'check': """grep -q 'CIS SSH Cryptographic Hardening' /etc/ssh/sshd_config 2>/dev/null && echo OK || echo FAIL""",
+            'verbose_check': """grep -E '^(Ciphers|KexAlgorithms|MACs|GSSAPIAuthentication|HostbasedAuthentication|IgnoreRhosts|PermitUserEnvironment|Banner) ' /etc/ssh/sshd_config 2>/dev/null || echo '(no hardening directives found)'""",
             'apply': """cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.cis
 # remove existing crypto directives to avoid conflicts
 sed -i -e '/^Ciphers /d' -e '/^KexAlgorithms /d' -e '/^MACs /d' \
@@ -12426,6 +12429,7 @@ echo DONE""",
         'file_perms': {
             'check': """[ "$(stat -c '%a' /etc/shadow 2>/dev/null)" = "640" ] && \
 [ "$(stat -c '%a' /etc/passwd 2>/dev/null)" = "644" ] && echo OK || echo FAIL""",
+            'verbose_check': """for f in /etc/passwd /etc/shadow /etc/group /etc/gshadow ; do [ -e "$f" ] && stat -c '%n: mode=%a owner=%U:%G' "$f" ; done""",
             'apply': """chmod 644 /etc/passwd /etc/group
 chmod 640 /etc/shadow /etc/gshadow
 chown root:root /etc/passwd /etc/group
@@ -12755,6 +12759,7 @@ echo DONE""",
         # --- PegaProx Recommendations ---
         'apparmor': {
             'check': """systemctl is-active apparmor 2>/dev/null | grep -q active && echo OK || echo FAIL""",
+            'verbose_check': """systemctl is-active apparmor 2>/dev/null || echo 'not active' ; if command -v aa-status >/dev/null 2>&1 ; then aa-status --profiled 2>/dev/null | sed 's/^/profiles loaded: /' ; fi""",
             'apply': """apt-get install -y apparmor apparmor-utils >/dev/null 2>&1
 systemctl enable --now apparmor 2>/dev/null || true
 aa-enforce /etc/apparmor.d/* 2>/dev/null || true
@@ -12775,6 +12780,7 @@ echo DONE""",
         },
         'sysctl_hardening': {
             'check': """grep -q 'net.ipv4.conf.all.rp_filter = 1' /etc/sysctl.d/99-pegaprox-hardening.conf 2>/dev/null && echo OK || echo FAIL""",
+            'verbose_check': """if [ -f /etc/sysctl.d/99-pegaprox-hardening.conf ]; then echo 'file exists:' ; grep -E '^[a-z]' /etc/sysctl.d/99-pegaprox-hardening.conf 2>/dev/null | head -10 ; echo '...' ; else echo 'file missing' ; fi ; echo '---live kernel values---' ; for k in net.ipv4.conf.all.rp_filter net.ipv4.tcp_syncookies kernel.randomize_va_space kernel.kptr_restrict ; do v=$(sysctl -n $k 2>/dev/null) ; echo "$k = $v" ; done""",
             'apply': """cat > /etc/sysctl.d/99-pegaprox-hardening.conf << 'SYSEOF'
 # PegaProx Security Hardening - sysctl parameters
 
@@ -12832,37 +12838,94 @@ echo DONE""",
         },
         'auditd_service': {
             'check': """systemctl is-active auditd 2>/dev/null | grep -q active && echo OK || echo FAIL""",
+            'verbose_check': """systemctl is-active auditd 2>/dev/null || echo 'not active' ; if command -v auditctl >/dev/null 2>&1 ; then auditctl -s 2>/dev/null | grep -E 'enabled|pid|rate' | head -5 ; auditctl -l 2>/dev/null | wc -l | awk '{print \"active rules: \"$1}' ; fi""",
             'apply': """apt-get install -y auditd audispd-plugins >/dev/null 2>&1
 systemctl enable --now auditd 2>/dev/null
 echo DONE""",
         },
     }
 
-    def check_node_hardening(self, node_name):
-        """Check CIS hardening status for a node via SSH"""
-        # build one big command to minimize SSH round-trips
+    def check_node_hardening(self, node_name, verbose=False):
+        """Check CIS hardening status for a node via SSH.
+
+        verbose=False (default): returns {control_id: bool}
+        verbose=True: returns {control_id: {'status': bool, 'evidence': str, 'command': str}}
+                      — used for audit reports (#322). Also runs the per-control 'verbose_check'
+                      command if defined, otherwise falls back to the raw check output.
+        """
         parts = []
         for cid, ctrl in self.CIS_CHECKS.items():
-            parts.append(f"echo '---{cid}---' && {{ {ctrl['check']}; }}")
+            if verbose and ctrl.get('verbose_check'):
+                # verbose check: extra context command AFTER the OK/FAIL line
+                parts.append(
+                    f"echo '---{cid}---' && {{ {ctrl['check']}; }} ; "
+                    f"echo '---{cid}:EVIDENCE---' && {{ {ctrl['verbose_check']}; }} 2>&1"
+                )
+            else:
+                parts.append(f"echo '---{cid}---' && {{ {ctrl['check']}; }}")
         combined = ' ; '.join(parts) + " ; echo '---END---'"
 
-        raw = self._ssh_node_output(node_name, combined, timeout=60)
+        raw = self._ssh_node_output(node_name, combined, timeout=90)
         if raw is None:
             return None
 
+        # simple (non-verbose) parse — preserved for backward compat
+        if not verbose:
+            results = {}
+            current_id = None
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith('---') and line.endswith('---'):
+                    tag = line.strip('-')
+                    if tag == 'END':
+                        break
+                    if tag in self.CIS_CHECKS:
+                        current_id = tag
+                elif current_id:
+                    results[current_id] = line.strip() == 'OK'
+                    current_id = None
+            return results
+
+        # verbose parse — capture status + everything up to next marker as evidence
         results = {}
         current_id = None
+        section = 'status'  # 'status' or 'evidence'
+        evidence_lines = []
+        status_line = None
+
+        def _flush(cid):
+            if cid and cid in self.CIS_CHECKS:
+                results[cid] = {
+                    'status': (status_line or '').strip() == 'OK',
+                    'evidence': '\n'.join(l for l in evidence_lines if l.strip())[:2000],
+                    'command': self.CIS_CHECKS[cid].get('check', ''),
+                }
+
         for line in raw.splitlines():
-            line = line.strip()
-            if line.startswith('---') and line.endswith('---'):
-                tag = line.strip('-')
+            stripped = line.strip()
+            if stripped.startswith('---') and stripped.endswith('---'):
+                tag = stripped.strip('-')
                 if tag == 'END':
+                    _flush(current_id)
                     break
-                if tag in self.CIS_CHECKS:
-                    current_id = tag
-            elif current_id:
-                results[current_id] = line.strip() == 'OK'
-                current_id = None
+                # evidence sub-marker like "ssh_perms:EVIDENCE"
+                if ':EVIDENCE' in tag:
+                    section = 'evidence'
+                    continue
+                # new control — flush previous
+                _flush(current_id)
+                current_id = tag if tag in self.CIS_CHECKS else None
+                section = 'status'
+                status_line = None
+                evidence_lines = []
+                continue
+
+            if not current_id:
+                continue
+            if section == 'status' and status_line is None:
+                status_line = stripped
+            else:
+                evidence_lines.append(line)  # keep original (with whitespace)
 
         return results
 

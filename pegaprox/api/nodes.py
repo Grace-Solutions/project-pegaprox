@@ -548,17 +548,36 @@ def update_node_subscription_api(cluster_id, node):
 # MK: this was surprisingly tricky to get right, proxmox smbios format is picky
 # =============================================================================
 
+def _ssh_run_checked(ssh, cmd, timeout=30):
+    """Run a command via SSH, raise on non-zero exit. NS Apr 2026 — used to be
+    scattered all over with `stdout.read()` and no check, which silently swallowed
+    systemctl failures during smbios deploy (#317 aftermath)."""
+    stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
+    out = stdout.read().decode('utf-8', errors='replace')
+    rc = stdout.channel.recv_exit_status()
+    err = stderr.read().decode('utf-8', errors='replace').strip()
+    if rc != 0:
+        raise RuntimeError(f"`{cmd}` failed (rc={rc}): {err or out[:200] or 'no output'}")
+    return out, err
+
+
 def _ssh_write_file(ssh, path, content, mode=None):
     """Write file via SSH - SFTP with exec_command fallback.
     MK Feb 2026 - some Proxmox nodes don't have openssh-sftp-server or /opt/
+    NS Apr 2026 - added exit code checks, was failing silently on perm errors
     """
     import os
     parent = os.path.dirname(path)
 
-    # Ensure parent directory exists
-    stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {parent}")
-    stdout.read()
+    # Ensure parent directory exists (check exit code!)
+    q_parent = shlex.quote(parent)
+    stdin, stdout, stderr = ssh.exec_command(f"mkdir -p {q_parent}")
+    rc = stdout.channel.recv_exit_status()
+    if rc != 0:
+        err = stderr.read().decode('utf-8', errors='replace').strip()
+        raise RuntimeError(f"mkdir -p {parent} failed (rc={rc}): {err or 'permission denied?'}")
 
+    q_path = shlex.quote(path)
     try:
         sftp = ssh.open_sftp()
         with sftp.file(path, 'w') as f:
@@ -569,16 +588,20 @@ def _ssh_write_file(ssh, path, content, mode=None):
     except (IOError, OSError) as e:
         logging.warning(f"SFTP write to {path} failed ({e}), falling back to exec_command")
         # Pipe content via stdin - avoids heredoc escaping issues
-        stdin, stdout, stderr = ssh.exec_command(f"cat > {path}")
+        stdin, stdout, stderr = ssh.exec_command(f"cat > {q_path}")
         stdin.write(content)
         stdin.channel.shutdown_write()
-        stdout.read()
-        err = stderr.read().decode().strip()
-        if err:
-            raise RuntimeError(f"Failed to write {path}: {err}")
+        rc = stdout.channel.recv_exit_status()
+        err = stderr.read().decode('utf-8', errors='replace').strip()
+        if rc != 0:
+            raise RuntimeError(f"write {path} failed (rc={rc}): {err or 'unknown'}")
         if mode is not None:
-            stdin, stdout, stderr = ssh.exec_command(f"chmod {oct(mode)[2:]} {path}")
-            stdout.read()
+            _ssh_run_checked(ssh, f"chmod {oct(mode)[2:]} {q_path}")
+
+    # Verify — file actually on disk with non-zero size
+    stdin, stdout, stderr = ssh.exec_command(f"test -s {q_path}")
+    if stdout.channel.recv_exit_status() != 0:
+        raise RuntimeError(f"Write verification failed: {path} missing or empty")
 
 SMBIOS_SCRIPT_TEMPLATE = '''#!/usr/bin/env python3
 """
@@ -935,6 +958,7 @@ def deploy_smbios_autoconfig(cluster_id, node):
     mgr = cluster_managers[cluster_id]
     settings = getattr(mgr.config, 'smbios_autoconfig', None) or {}
     
+    ssh = None
     try:
         # Get node IP
         node_ip = mgr.host
@@ -949,11 +973,17 @@ def deploy_smbios_autoconfig(cluster_id, node):
                             break
         except:
             pass
-        
-        ssh = mgr._ssh_connect(node_ip)
+
+        # NS Apr 2026 - retry SSH 3x, transient failures shouldn't kill the whole deploy
+        for attempt in range(3):
+            ssh = mgr._ssh_connect(node_ip)
+            if ssh:
+                break
+            if attempt < 2:
+                time.sleep(1.5)
         if not ssh:
-            return jsonify({'error': 'SSH connection failed - check SSH key in cluster settings'}), 500
-        
+            return jsonify({'error': 'SSH connection failed after 3 attempts - check SSH key in cluster settings'}), 500
+
         # Generate script with settings (defense-in-depth: strip quotes/backslashes - NS Feb 2026)
         def _sanitize_smbios(val):
             """Strip characters dangerous in Python string literals as defense-in-depth."""
@@ -964,27 +994,40 @@ def deploy_smbios_autoconfig(cluster_id, node):
             version=_sanitize_smbios(settings.get('version', 'v1')),
             family=_sanitize_smbios(settings.get('family', 'ProxmoxVE'))
         )
-        
-        # Write script and service to node (SFTP with exec_command fallback)
+
+        # Write script and service to node (SFTP with exec_command fallback) — raises on failure
         _ssh_write_file(ssh, '/opt/pegaprox-smbios-autoconfig.py', script, 0o755)
         _ssh_write_file(ssh, '/etc/systemd/system/pegaprox-smbios-autoconfig.service', SMBIOS_SERVICE_TEMPLATE)
 
-        # Enable and start service
-        # NS: clear processed list so ALL vms get checked (not just new ones)
-        for cmd in ['rm -f /var/lib/pegaprox-smbios-processed.txt', 'systemctl daemon-reload', 'systemctl enable pegaprox-smbios-autoconfig', 'systemctl restart pegaprox-smbios-autoconfig']:
-            stdin, stdout, stderr = ssh.exec_command(cmd)
-            stdout.read()
+        # clear processed list + enable/start. Each command is checked; a failed
+        # systemctl used to be swallowed and we'd return success anyway
+        _ssh_run_checked(ssh, 'rm -f /var/lib/pegaprox-smbios-processed.txt')
+        _ssh_run_checked(ssh, 'systemctl daemon-reload')
+        _ssh_run_checked(ssh, 'systemctl enable pegaprox-smbios-autoconfig')
+        _ssh_run_checked(ssh, 'systemctl restart pegaprox-smbios-autoconfig')
 
-        ssh.close()
+        # confirm it actually became active (systemctl start/restart can succeed even when unit fails)
+        stdin, stdout, stderr = ssh.exec_command('systemctl is-active pegaprox-smbios-autoconfig')
+        active = stdout.read().decode('utf-8', errors='replace').strip()
+        stdout.channel.recv_exit_status()
+        if active != 'active':
+            # grab last log lines for context
+            stdin, stdout, stderr = ssh.exec_command('journalctl -u pegaprox-smbios-autoconfig -n 10 --no-pager 2>/dev/null | tail -10')
+            log_tail = stdout.read().decode('utf-8', errors='replace').strip()
+            raise RuntimeError(f"service not active (state={active}). Last log: {log_tail[:400]}")
 
         usr = getattr(request, 'session', {}).get('user', 'system')
         log_audit(usr, 'smbios_autoconfig.deployed', f"SMBIOS auto-config deployed to {node}", cluster=mgr.config.name)
 
         return jsonify({'success': True, 'message': f'SMBIOS Auto-Config deployed to {node}'})
-        
+
     except Exception as e:
-        logging.error(f"Error deploying SMBIOS autoconfig: {e}")
+        logging.error(f"Error deploying SMBIOS autoconfig to {node}: {e}")
         return jsonify({'error': safe_error(e, 'SMBIOS deploy failed')}), 500
+    finally:
+        if ssh:
+            try: ssh.close()
+            except: pass
 
 
 @bp.route('/api/clusters/<cluster_id>/nodes/<node>/smbios-autoconfig', methods=['DELETE'])
@@ -1249,31 +1292,48 @@ def deploy_smbios_autoconfig_all(cluster_id):
 
     for node in nodes:
         node_ip = node_ips.get(node, mgr.config.host)
+        ssh = None
         try:
             # NS: Staggered connections to prevent SSH server overload
             if results:  # Not the first node
                 time.sleep(1.0)
-            
-            ssh = mgr._ssh_connect(node_ip)
+
+            # retry transient SSH failures before giving up
+            for attempt in range(3):
+                ssh = mgr._ssh_connect(node_ip)
+                if ssh:
+                    break
+                if attempt < 2:
+                    time.sleep(1.5)
             if not ssh:
-                results.append({'node': node, 'success': False, 'error': 'SSH connection failed'})
+                results.append({'node': node, 'success': False, 'error': 'SSH connection failed after 3 attempts'})
                 continue
-            
-            # Write script and service (SFTP with exec_command fallback)
+
+            # Write script and service - _ssh_write_file now raises on failure
             _ssh_write_file(ssh, '/opt/pegaprox-smbios-autoconfig.py', script, 0o755)
             _ssh_write_file(ssh, '/etc/systemd/system/pegaprox-smbios-autoconfig.service', SMBIOS_SERVICE_TEMPLATE)
 
-            # Enable and start service
-            # NS: clear processed list so ALL vms get checked
-            for cmd in ['rm -f /var/lib/pegaprox-smbios-processed.txt', 'systemctl daemon-reload', 'systemctl enable pegaprox-smbios-autoconfig', 'systemctl restart pegaprox-smbios-autoconfig']:
-                stdin, stdout, stderr = ssh.exec_command(cmd)
-                stdout.read()
-            
-            ssh.close()
+            # NS: clear processed list + checked systemctl commands
+            _ssh_run_checked(ssh, 'rm -f /var/lib/pegaprox-smbios-processed.txt')
+            _ssh_run_checked(ssh, 'systemctl daemon-reload')
+            _ssh_run_checked(ssh, 'systemctl enable pegaprox-smbios-autoconfig')
+            _ssh_run_checked(ssh, 'systemctl restart pegaprox-smbios-autoconfig')
+
+            # verify active
+            stdin, stdout, stderr = ssh.exec_command('systemctl is-active pegaprox-smbios-autoconfig')
+            active = stdout.read().decode('utf-8', errors='replace').strip()
+            stdout.channel.recv_exit_status()
+            if active != 'active':
+                raise RuntimeError(f"service not active (state={active})")
+
             results.append({'node': node, 'success': True})
-            
+
         except Exception as e:
             results.append({'node': node, 'success': False, 'error': safe_error(e, 'SMBIOS deploy failed')})
+        finally:
+            if ssh:
+                try: ssh.close()
+                except: pass
     
     success_count = sum(1 for r in results if r['success'])
     usr = getattr(request, 'session', {}).get('user', 'system')

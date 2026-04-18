@@ -388,6 +388,9 @@ def _run_v2p_migration(task):
                 bios = 'ovmf'; machine = 'q35'
             else:
                 bios = 'seabios'; machine = 'pc'
+        # persist for later stages (offline copy path post-processing)
+        task._detected_bios = bios
+        task._detected_machine = machine
 
         # OS type: prefer guestId mapping, fallback to string matching
         from pegaprox.core.xhm import _ESXI_TO_PVE_OSTYPE
@@ -485,12 +488,20 @@ def _run_v2p_migration(task):
         else:
             pve_config['net0'] = f'{net_driver},bridge={task.network_bridge}'
         if bios == 'ovmf':
-            # secure boot: auto-detect from ESXi or user override
+            # NS Apr 2026 (offline-transfer bug): DON'T allocate efidisk0 here.
+            # On file-based storage (NFS/dir), `efidisk0: storage:1` allocates vm-XXX-disk-0.qcow2.
+            # Then `qm importdisk --format raw` allocates vm-XXX-disk-0.raw — same basename.
+            # Proxmox's volume resolver then attaches the 50G raw as efidisk0 and
+            # the 1G qcow2 becomes 'Unused Disk 0' → VM has no bootable system disk.
+            # Fix: create the system disk first (importdisk takes disk-0), add EFI disk
+            # afterwards via qm set (gets disk-1 with unique base name).
             sb = getattr(task, 'secure_boot', None)
             if sb is None:
                 sb = hw.get('secure_boot', False)
-            pre_keys = '1' if sb else '0'
-            pve_config['efidisk0'] = f'{task.target_storage}:1,efitype=4m,pre-enrolled-keys={pre_keys}'
+            task._pending_efidisk = {
+                'efitype': '4m',
+                'pre_enrolled_keys': '1' if sb else '0',
+            }
         # TPM: auto-detect or user override
         tpm = getattr(task, 'tpm_enabled', None)
         if tpm is None:
@@ -3519,18 +3530,39 @@ exit $((S + R))
         else:
             task.log(f"  WARNING: boot order failed: {boot_out[:150]}")
 
-        # MK: Apr 2026 — ensure BIOS/OVMF config is correct after disk operations (#222)
-        # VM creation set bios/machine/efidisk0, but sed cleanup might have removed them
+        # MK Apr 2026 / NS Apr 2026 — ensure BIOS/OVMF + EFI disk after disk operations (#222, offline-transfer bug)
+        # We intentionally did NOT set efidisk0 at VM create time (volume-name collision with imported disk).
+        # Now that the system disk has a unique vm-XXX-disk-0 name, allocate the EFI disk — it will get disk-1.
         if bios == 'ovmf':
             _pve_node_exec(pve_mgr, task.target_node,
                 f"qm set {task.proxmox_vmid} --bios ovmf --machine q35 2>&1", timeout=10)
-            # check if efidisk0 exists, create if missing
-            rc_chk, cfg_chk, _ = _pve_node_exec(pve_mgr, task.target_node,
-                f"qm config {task.proxmox_vmid} 2>&1 | grep -c efidisk0", timeout=10)
-            if str(cfg_chk or '').strip() == '0':
+
+            # fetch current config to decide
+            rc_cfg, cfg_full, _ = _pve_node_exec(pve_mgr, task.target_node,
+                f"qm config {task.proxmox_vmid} 2>&1", timeout=10)
+            cfg_full = str(cfg_full or '')
+            efi_line = ''
+            for line in cfg_full.splitlines():
+                if line.startswith('efidisk0:'):
+                    efi_line = line
+                    break
+
+            pending = getattr(task, '_pending_efidisk', None) or {'efitype': '4m', 'pre_enrolled_keys': '0'}
+            pre_keys = pending.get('pre_enrolled_keys', '0')
+
+            # if an efidisk0 line exists but points at the system disk (any attached system vol),
+            # clear it before re-allocating. Signal: efi size mentioned as GB (should be 1M–4M).
+            if efi_line and ('size=' in efi_line.lower()) and ('G,' in efi_line or 'G ' in efi_line or efi_line.rstrip().endswith('G')):
+                task.log(f"  Detected corrupt efidisk0 ({efi_line.strip()[:120]}) — removing")
                 _pve_node_exec(pve_mgr, task.target_node,
-                    f"qm set {task.proxmox_vmid} --efidisk0 {task.target_storage}:1,efitype=4m,pre-enrolled-keys={'1' if getattr(task, 'secure_boot', False) else '0'} 2>&1", timeout=15)
-                task.log("  EFI disk created (OVMF firmware detected)")
+                    f"qm set {task.proxmox_vmid} --delete efidisk0 2>&1", timeout=15)
+                efi_line = ''
+
+            if not efi_line:
+                _pve_node_exec(pve_mgr, task.target_node,
+                    f"qm set {task.proxmox_vmid} --efidisk0 {task.target_storage}:1,efitype=4m,pre-enrolled-keys={pre_keys} 2>&1",
+                    timeout=15)
+                task.log(f"  EFI disk allocated (OVMF, pre-enrolled-keys={pre_keys})")
             task.log(f"  BIOS: ovmf, Machine: q35 ✓")
         
         # Start VM on local storage
@@ -3612,10 +3644,44 @@ def _do_offline_qemuimg_copy(pve_mgr, task, esxi_host, esxi_user, esxi_pass,
     if not ok:
         task.set_phase('failed', 'Disk copy failed')
         return
-    
+
     _pve_node_exec(pve_mgr, task.target_node,
         f"qm set {task.proxmox_vmid} --boot order={disk_bus}0 2>&1", timeout=10)
-    
+
+    # NS Apr 2026: OVMF/EFI post-copy fix — same logic as NZD path.
+    # Previously the offline copy path never reset bios/machine/efidisk after disk import,
+    # so the corrupted initial efidisk0 from qm create stayed and the VM couldn't boot.
+    bios = getattr(task, 'bios_override', None) or getattr(task, '_detected_bios', 'seabios')
+    if bios == 'ovmf':
+        _pve_node_exec(pve_mgr, task.target_node,
+            f"qm set {task.proxmox_vmid} --bios ovmf --machine q35 2>&1", timeout=10)
+
+        rc_cfg, cfg_full, _ = _pve_node_exec(pve_mgr, task.target_node,
+            f"qm config {task.proxmox_vmid} 2>&1", timeout=10)
+        cfg_full = str(cfg_full or '')
+        efi_line = ''
+        for line in cfg_full.splitlines():
+            if line.startswith('efidisk0:'):
+                efi_line = line
+                break
+
+        pending = getattr(task, '_pending_efidisk', None) or {'efitype': '4m', 'pre_enrolled_keys': '0'}
+        pre_keys = pending.get('pre_enrolled_keys', '0')
+
+        # corrupt efidisk0 = pointing at a multi-GB volume (real EFI is 1-4 MB)
+        if efi_line and ('size=' in efi_line.lower()) and ('G,' in efi_line or 'G ' in efi_line or efi_line.rstrip().endswith('G')):
+            task.log(f"  Detected corrupt efidisk0 ({efi_line.strip()[:120]}) — removing")
+            _pve_node_exec(pve_mgr, task.target_node,
+                f"qm set {task.proxmox_vmid} --delete efidisk0 2>&1", timeout=15)
+            efi_line = ''
+
+        if not efi_line:
+            _pve_node_exec(pve_mgr, task.target_node,
+                f"qm set {task.proxmox_vmid} --efidisk0 {task.target_storage}:1,efitype=4m,pre-enrolled-keys={pre_keys} 2>&1",
+                timeout=15)
+            task.log(f"  EFI disk allocated (OVMF, pre-enrolled-keys={pre_keys})")
+        task.log(f"  BIOS: ovmf, Machine: q35 ✓")
+
     if task.start_after:
         task.log("Starting VM on local storage...")
         try:
@@ -3625,7 +3691,7 @@ def _do_offline_qemuimg_copy(pve_mgr, task, esxi_host, esxi_user, esxi_pass,
             task.log(f"VM {task.proxmox_vmid} STARTED")
         except Exception as e:
             task.log(f"Start failed: {e}")
-    
+
     task.set_phase('completed')
     task.log(f"COMPLETED: {task.vm_name} -> VMID {task.proxmox_vmid} (offline copy)")
 

@@ -929,6 +929,24 @@ class PegaProxDB:
 
         except Exception as e:
             logging.error(f"Error checking clusters schema: {e}")
+
+        # NS Apr 2026: SSH creds for PBS — needed for running apt-get upgrade on PBS host
+        try:
+            cursor.execute("PRAGMA table_info(pbs_servers)")
+            pbs_cols = [c[1] for c in cursor.fetchall()]
+            for col_name, col_def in [
+                ('ssh_user', 'TEXT DEFAULT \'\''),
+                ('ssh_port', 'INTEGER DEFAULT 22'),
+                ('ssh_key_encrypted', 'TEXT DEFAULT \'\''),
+            ]:
+                if col_name not in pbs_cols:
+                    try:
+                        cursor.execute(f"ALTER TABLE pbs_servers ADD COLUMN {col_name} {col_def}")
+                        logging.info(f"Added {col_name} column to pbs_servers")
+                    except Exception as e:
+                        logging.debug(f"Could not add {col_name}: {e}")
+        except Exception as e:
+            logging.debug(f"PBS schema migration skipped: {e}")
         
         # Add HMAC signature column to audit_log for integrity verification (Jan 2026)
         try:

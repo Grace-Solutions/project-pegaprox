@@ -41,7 +41,12 @@ class PBSManager:
         self.linked_clusters = config.get('linked_clusters', [])
         self.enabled = config.get('enabled', True)
         self.notes = config.get('notes', '')
-        
+        # NS Apr 2026: SSH credentials for remote apt-get upgrade (PBS API has no upgrade endpoint)
+        self.ssh_user = config.get('ssh_user', '') or ''
+        self.ssh_port = int(config.get('ssh_port', 22) or 22)
+        self.ssh_key = config.get('ssh_key', '') or ''
+        self._update_task = None  # active UpdateTask or None
+
         self._session = requests.Session()
         self._session.verify = self.ssl_verify
         self._ticket = None
@@ -251,6 +256,203 @@ class PBSManager:
     def refresh_apt(self) -> dict:
         """Refresh APT package cache on PBS"""
         return self.api_post('/nodes/localhost/apt/update')
+
+    # ── Update execution via SSH (PBS has no API upgrade endpoint) ──
+    def _ssh_connect(self):
+        """Open paramiko SSH connection to the PBS host.
+
+        Priority for SSH user:
+        1. Explicit ssh_user from config (UI override)
+        2. Username from user@realm (password-auth case, e.g. 'root@pam' -> 'root')
+        3. Default 'root' (API-token case — token user has no unix account)
+        """
+        try:
+            import paramiko
+        except ImportError:
+            return None, "paramiko not installed"
+
+        if self.ssh_user:
+            ssh_user = self.ssh_user
+        elif self._using_api_token:
+            # API token users (like 'pegaprox@pbs!tokenname') don't exist as unix users —
+            # fall back to 'root' which is the default shell account on PBS
+            ssh_user = 'root'
+        elif self.user:
+            ssh_user = self.user.split('@')[0]  # root@pam -> root
+        else:
+            ssh_user = 'root'
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        # try key-based first if we have one
+        if self.ssh_key:
+            try:
+                from io import StringIO
+                key = None
+                for KeyClass in [paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey]:
+                    try:
+                        key = KeyClass.from_private_key(StringIO(self.ssh_key))
+                        break
+                    except Exception:
+                        continue
+                if key:
+                    client.connect(self.host, port=self.ssh_port, username=ssh_user,
+                                   pkey=key, timeout=15, banner_timeout=15, auth_timeout=15,
+                                   allow_agent=False, look_for_keys=False)
+                    return client, None
+            except Exception as e:
+                logging.warning(f"[PBS:{self.name}] SSH key auth failed: {e}")
+
+        # fallback: API password (many PBS installs share system + web password on root@pam)
+        if self.password:
+            try:
+                client.connect(self.host, port=self.ssh_port, username=ssh_user,
+                               password=self.password, timeout=15, banner_timeout=15, auth_timeout=15,
+                               allow_agent=False, look_for_keys=False)
+                return client, None
+            except Exception as e:
+                return None, f"SSH auth failed for {ssh_user}@{self.host}: {e}"
+
+        return None, f"No SSH credentials configured (ssh_key or password needed)"
+
+    def start_update(self, reboot: bool = False):
+        """Kick off apt update + dist-upgrade on the PBS host in a background thread.
+        Returns an UpdateTask-like object (subset of what PVE uses)."""
+        from pegaprox.models.tasks import UpdateTask
+        from pegaprox.utils.concurrent import GEVENT_PATCHED
+        import threading as _th
+
+        with self._lock:
+            if self._update_task and self._update_task.status in ('starting', 'updating', 'rebooting', 'waiting_online'):
+                return self._update_task
+            task = UpdateTask(self.name, reboot)
+            self._update_task = task
+
+        if GEVENT_PATCHED:
+            try:
+                import gevent
+                gevent.spawn(self._perform_update, task)
+                return task
+            except Exception:
+                pass
+        t = _th.Thread(target=self._perform_update, args=(task,), daemon=True)
+        t.start()
+        return task
+
+    def get_update_status(self):
+        return self._update_task
+
+    def clear_update_status(self):
+        t = self._update_task
+        if t and t.status in ('completed', 'failed'):
+            self._update_task = None
+            return True
+        return False
+
+    def _perform_update(self, task):
+        from datetime import datetime
+        import time as _t
+        ssh = None
+        try:
+            task.status = 'updating'
+            task.phase = 'connecting'
+            task.add_output(f"Connecting to PBS {self.host}:{self.ssh_port}...")
+            ssh, err = self._ssh_connect()
+            if not ssh:
+                raise Exception(err or 'SSH connection failed')
+            task.add_output("SSH connection established")
+
+            # are we root?
+            stdin, stdout, _ = ssh.exec_command('id -u')
+            uid = stdout.read().decode().strip()
+            sudo = '' if uid == '0' else 'sudo '
+
+            # apt update
+            task.phase = 'apt_update'
+            task.add_output("Running apt update...")
+            stdin, stdout, stderr = ssh.exec_command(f'{sudo}DEBIAN_FRONTEND=noninteractive apt-get update')
+            rc = stdout.channel.recv_exit_status()
+            out = stdout.read().decode('utf-8', errors='replace')
+            err = stderr.read().decode('utf-8', errors='replace')
+            if rc != 0:
+                raise Exception(f"apt update failed (rc={rc}): {err or out[:300]}")
+            task.add_output("[OK] apt update successful")
+
+            # apt dist-upgrade
+            task.phase = 'apt_dist_upgrade'
+            task.add_output("Running apt dist-upgrade...")
+            cmd = (f'{sudo}DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y '
+                   f'-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"')
+            stdin, stdout, stderr = ssh.exec_command(cmd, timeout=1800)
+            rc = stdout.channel.recv_exit_status()
+            out = stdout.read().decode('utf-8', errors='replace')
+            err = stderr.read().decode('utf-8', errors='replace')
+            if rc != 0:
+                raise Exception(f"dist-upgrade failed (rc={rc}): {err[:400] or out[:400]}")
+            # crude counter
+            for line in out.splitlines():
+                if 'upgraded' in line.lower() and 'newly installed' in line.lower():
+                    try:
+                        task.packages_upgraded = int(line.split()[0])
+                    except Exception:
+                        pass
+                    break
+            task.add_output(f"[OK] dist-upgrade successful ({task.packages_upgraded} packages)")
+
+            # cleanup
+            for c in [f'{sudo}apt-get autoremove -y', f'{sudo}apt-get autoclean']:
+                stdin, stdout, stderr = ssh.exec_command(c)
+                stdout.channel.recv_exit_status()
+
+            # reboot?
+            if task.reboot:
+                task.phase = 'reboot'
+                task.status = 'rebooting'
+                task.add_output("Rebooting PBS...")
+                try:
+                    transport = ssh.get_transport()
+                    channel = transport.open_session()
+                    channel.get_pty()
+                    channel.settimeout(10)
+                    channel.exec_command('shutdown -r now' if uid == '0' else 'sudo shutdown -r now')
+                    _t.sleep(3)
+                    channel.close()
+                except Exception:
+                    pass  # connection drop during reboot is expected
+                try: ssh.close()
+                except: pass
+                ssh = None
+                # wait for reconnect (60-600s window)
+                task.phase = 'wait_online'
+                task.status = 'waiting_online'
+                deadline = _t.time() + 600
+                while _t.time() < deadline:
+                    _t.sleep(10)
+                    test_ssh, terr = self._ssh_connect()
+                    if test_ssh:
+                        try: test_ssh.close()
+                        except: pass
+                        task.add_output("[OK] PBS is back online")
+                        break
+                else:
+                    task.status = 'failed'
+                    task.error = 'PBS did not come back online within 10 min'
+                    task.completed_at = datetime.now()
+                    return
+
+            task.status = 'completed'
+            task.phase = 'done'
+            task.completed_at = datetime.now()
+            task.add_output("[OK] Update completed")
+        except Exception as e:
+            task.status = 'failed'
+            task.error = str(e)
+            task.add_output(f"[ERROR] {e}")
+        finally:
+            if ssh:
+                try: ssh.close()
+                except: pass
 
     def get_datastore_usage(self) -> dict:
         """Get all datastores usage overview - lightweight endpoint"""
@@ -772,6 +974,10 @@ class PBSManager:
             'linked_clusters': self.linked_clusters,
             'notes': self.notes,
             'using_api_token': self._using_api_token,
+            # NS Apr 2026: SSH config — secret key is masked so UI can show "configured" state
+            'ssh_user': self.ssh_user,
+            'ssh_port': self.ssh_port,
+            'has_ssh_key': bool(self.ssh_key),
         }
 
 
@@ -803,6 +1009,13 @@ def load_pbs_servers():
                 except Exception:
                     api_token_secret = ''
             
+            ssh_key = ''
+            if row_dict.get('ssh_key_encrypted'):
+                try:
+                    ssh_key = db._decrypt(row_dict['ssh_key_encrypted'])
+                except Exception:
+                    ssh_key = ''
+
             config = {
                 'name': row_dict.get('name', 'PBS'),
                 'host': row_dict.get('host', ''),
@@ -816,6 +1029,9 @@ def load_pbs_servers():
                 'enabled': bool(row_dict.get('enabled', 1)),
                 'linked_clusters': json.loads(row_dict.get('linked_clusters', '[]')),
                 'notes': row_dict.get('notes', ''),
+                'ssh_user': row_dict.get('ssh_user', '') or '',
+                'ssh_port': row_dict.get('ssh_port', 22) or 22,
+                'ssh_key': ssh_key,
             }
             
             mgr = PBSManager(pbs_id, config)
@@ -837,26 +1053,46 @@ def save_pbs_server(pbs_id: str, config: dict):
     pass_encrypted = ''
     if config.get('password') and config['password'] != '********':
         pass_encrypted = db._encrypt(config['password'])
-    
+
     api_token_secret_encrypted = ''
     if config.get('api_token_secret') and config['api_token_secret'] != '********':
         api_token_secret_encrypted = db._encrypt(config['api_token_secret'])
-    
+
+    # NS Apr 2026: SSH key for apt-upgrade runner
+    ssh_key_encrypted = ''
+    if config.get('ssh_key') and config['ssh_key'] != '********':
+        ssh_key_encrypted = db._encrypt(config['ssh_key'])
+
+    # fetch old values once to preserve encrypted fields when blank is submitted
+    existing = cursor.execute(
+        "SELECT pass_encrypted, api_token_secret_encrypted, ssh_key_encrypted FROM pbs_servers WHERE id = ?",
+        (pbs_id,)
+    ).fetchone()
+    old_pass = existing[0] if existing else ''
+    old_token = existing[1] if existing else ''
+    old_sshkey = existing[2] if existing and len(existing) > 2 else ''
+
     cursor.execute('''
-        INSERT OR REPLACE INTO pbs_servers 
+        INSERT OR REPLACE INTO pbs_servers
         (id, name, host, port, user, pass_encrypted, api_token_id, api_token_secret_encrypted,
-         fingerprint, ssl_verify, enabled, linked_clusters, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
+         fingerprint, ssl_verify, enabled, linked_clusters, notes,
+         ssh_user, ssh_port, ssh_key_encrypted,
+         created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?,
                 COALESCE((SELECT created_at FROM pbs_servers WHERE id = ?), ?), ?)
     ''', (
         pbs_id, config.get('name', 'PBS'), config.get('host', ''), int(config.get('port', 8007)),
         config.get('user', 'root@pam'),
-        pass_encrypted or (cursor.execute("SELECT pass_encrypted FROM pbs_servers WHERE id = ?", (pbs_id,)).fetchone() or [''])[0],
+        pass_encrypted or old_pass,
         config.get('api_token_id', ''),
-        api_token_secret_encrypted or (cursor.execute("SELECT api_token_secret_encrypted FROM pbs_servers WHERE id = ?", (pbs_id,)).fetchone() or [''])[0],
+        api_token_secret_encrypted or old_token,
         config.get('fingerprint', ''), int(config.get('ssl_verify', False)),
         int(config.get('enabled', True)), json.dumps(config.get('linked_clusters', [])),
         config.get('notes', ''),
+        config.get('ssh_user', '') or '',
+        int(config.get('ssh_port', 22) or 22),
+        ssh_key_encrypted or old_sshkey,
         pbs_id, datetime.now().isoformat(), datetime.now().isoformat(),
     ))
     db.conn.commit()

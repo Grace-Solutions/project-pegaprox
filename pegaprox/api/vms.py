@@ -5058,6 +5058,62 @@ def _execute_replication(job):
                 f"host={fp['host']},fingerprint={fp['fingerprint']}"
             )
 
+            # NS Apr 2026: #321 - second+ replication run fails because VM exists on target.
+            # A replication job's whole point is to REPLACE the old copy, so remove it here
+            # before remote_migrate tries to create-from-empty (which errors on existing VMID).
+            existing_target_node = None
+            try:
+                tgt_res = target_mgr._api_get(
+                    f"https://{target_mgr.host}:8006/api2/json/cluster/resources",
+                    params={'type': 'vm'}
+                )
+                if tgt_res.status_code == 200:
+                    for r in tgt_res.json().get('data', []):
+                        if int(r.get('vmid', 0)) == vmid:
+                            existing_target_node = r.get('node')
+                            break
+            except Exception as e:
+                logging.warning(f"[XCREPL] Job {job_id}: target existence check failed: {e}")
+
+            if existing_target_node:
+                logging.info(f"[XCREPL] Job {job_id}: VM {vmid} already on target node {existing_target_node}, removing old replica")
+                try:
+                    # stop first so PVE lets us delete it (ignore errors if already stopped)
+                    stop_url = (
+                        f"https://{target_mgr.host}:8006/api2/json/nodes/{existing_target_node}"
+                        f"/{vm_type}/{vmid}/status/stop"
+                    )
+                    try:
+                        stop_resp = target_mgr._api_post(stop_url, data={})
+                        if stop_resp.status_code == 200:
+                            stop_task = stop_resp.json().get('data')
+                            if stop_task:
+                                _wait_for_task(target_mgr, stop_task, timeout=60)
+                    except Exception:
+                        pass
+
+                    # delete the VM and its disks (purge removes replication jobs, destroy removes unreferenced disks)
+                    del_url = (
+                        f"https://{target_mgr.host}:8006/api2/json/nodes/{existing_target_node}"
+                        f"/{vm_type}/{vmid}"
+                    )
+                    del_resp = target_mgr._api_delete(del_url, params={'purge': 1, 'destroy-unreferenced-disks': 1})
+                    if del_resp.status_code == 200:
+                        del_task = del_resp.json().get('data')
+                        if del_task:
+                            del_ok, del_detail = _wait_for_task(target_mgr, del_task, timeout=600)
+                            if not del_ok:
+                                raise RuntimeError(f"delete task failed: {del_detail}")
+                        logging.info(f"[XCREPL] Job {job_id}: old replica {vmid} removed from target")
+                    else:
+                        raise RuntimeError(f"delete request failed: {del_resp.status_code} {del_resp.text[:200]}")
+                except Exception as e:
+                    logging.error(f"[XCREPL] Job {job_id}: could not remove old replica: {e}")
+                    target_mgr.delete_api_token(token_name)
+                    _cleanup_clone_and_snap(source_mgr, source_node, clone_vmid, vmid, vm_type, snap_name)
+                    _update_repl_status(db, job_id, 'error', f'Could not remove old replica on target: {e}')
+                    return
+
             # migrate the clone (offline, delete source clone after)
             result = source_mgr.remote_migrate_vm(
                 node=source_node, vmid=clone_vmid, vm_type=vm_type,
@@ -5717,42 +5773,36 @@ def start_vnc_websocket_server(port=5001, ssl_cert=None, ssl_key=None, host='0.0
         manager = cluster_managers[cluster_id]
         host = manager.host
         
-        print(f"Target host: {host}")
-        
         pve_ws = None
-        
+
         try:
             import urllib.parse
             import urllib.request
             import json
-            import websocket as ws_client  # websocket-client for connecting to Proxmox
-            
-            # Create SSL context
+            import websocket as ws_client
+
             ssl_ctx = ssl.create_default_context()
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
-            
-            # Step 1: Login to Proxmox
-            print("Step 1: Login to Proxmox...")
+
+            # Login to Proxmox to get auth ticket
             login_data = urlencode({
                 'username': manager.config.user,
                 'password': manager.config.pass_
             }).encode('utf-8')
-            
+
             login_req = urllib.request.Request(
                 f"https://{host}:8006/api2/json/access/ticket",
                 data=login_data, method='POST'
             )
-            
+
             with urllib.request.urlopen(login_req, context=ssl_ctx, timeout=10) as response:
                 login_result = json.loads(response.read().decode('utf-8'))
-            
+
             pve_ticket = login_result['data']['ticket']
             csrf_token = login_result['data']['CSRFPreventionToken']
-            print("Got PVE ticket")
 
-            # Step 2: Get VNC ticket
-            print(f"Step 2: Get VNC ticket...")
+            # Request VNC proxy ticket (must connect to WS within ~10s)
             if vm_type == 'qemu':
                 vnc_url = f"https://{host}:8006/api2/json/nodes/{node}/qemu/{vmid}/vncproxy"
             else:
@@ -5768,10 +5818,7 @@ def start_vnc_websocket_server(port=5001, ssl_cert=None, ssl_key=None, host='0.0
 
             vnc_ticket = vnc_result['data']['ticket']
             port = vnc_result['data']['port']
-            print(f"Got VNC ticket, port={port}")
 
-            # Step 3: Connect to Proxmox WebSocket
-            print("Step 3: Connect to Proxmox WebSocket...")
             encoded_vnc_ticket = url_quote(vnc_ticket, safe='')
 
             if vm_type == 'qemu':
@@ -5788,52 +5835,54 @@ def start_vnc_websocket_server(port=5001, ssl_cert=None, ssl_key=None, host='0.0
                 timeout=5
             )
 
-            print("Connected to Proxmox!")
-            pve_ws.settimeout(0.05)  # Short timeout for non-blocking
+            # NS Apr 2026: disable Nagle — VNC is interactive (key/mouse = small packets),
+            # Nagle can add up to 40ms of buffering lag which feels awful
+            try:
+                import socket as _socket
+                pve_ws.sock.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+            except Exception as _e:
+                logging.debug(f"[VNC] TCP_NODELAY on pve_ws not set: {_e}")
 
-            bytes_sent = 0
-            bytes_received = 0
-
-            print("Step 4: Starting proxy loop...")
+            logging.debug(f"[VNC] connected to {host} for {vm_type}/{vmid}")
 
             import asyncio
 
             bytes_sent = 0
             bytes_received = 0
             running = True
+            stop_evt = asyncio.Event()
 
-            # Set Proxmox socket to very short timeout for non-blocking behavior
-            pve_ws.settimeout(0.001)
-            
+            # NS Apr 2026 (#312/#92): the old loop used settimeout(0.001) + asyncio.sleep(0.005)
+            # to fake non-blocking recv. That's a busy-wait that blocks the event loop on every
+            # recv() call — under load or network jitter it drops bytes and the session dies after
+            # a few minutes. Switch to blocking recv in a worker thread via asyncio.to_thread.
+            pve_ws.settimeout(None)  # blocking mode — to_thread handles the blocking call
+
             async def proxmox_to_client():
-                """Forward data from Proxmox to browser"""
+                """Forward data from Proxmox to browser (blocking recv handled in thread)"""
                 nonlocal bytes_received, running
                 while running:
                     try:
-                        # Non-blocking receive
-                        try:
-                            data = pve_ws.recv()
-                            if data:
-                                bytes_received += len(data)
-                                # forward as-is: bytes stay bytes, strings stay strings
-                                if isinstance(data, str):
-                                    data = data.encode('latin-1')
-                                await websocket.send(data)
-                        except ws_client.WebSocketTimeoutException:
-                            # No data available, yield control
-                            await asyncio.sleep(0.005)
+                        data = await asyncio.to_thread(pve_ws.recv)
+                        if not data:
+                            running = False
+                            break
+                        bytes_received += len(data)
+                        if isinstance(data, str):
+                            data = data.encode('latin-1')
+                        await websocket.send(data)
                     except ws_client.WebSocketConnectionClosedException:
-                        print("Proxmox closed connection")
                         running = False
                         break
                     except Exception as e:
                         if running:
-                            print(f"PVE->Client error: {e}")
+                            logging.debug(f"[VNC] PVE->Client: {e}")
                         running = False
                         break
-            
+                stop_evt.set()
+
             async def client_to_proxmox():
-                """Forward data from browser to Proxmox"""
+                """Forward data from browser to Proxmox (blocking send handled in thread)"""
                 nonlocal bytes_sent, running
                 try:
                     async for message in websocket:
@@ -5842,18 +5891,36 @@ def start_vnc_websocket_server(port=5001, ssl_cert=None, ssl_key=None, host='0.0
                         bytes_sent += len(message)
                         if isinstance(message, str):
                             message = message.encode('latin-1')
-                        pve_ws.send(message)
+                        await asyncio.to_thread(pve_ws.send, message)
                 except Exception as e:
                     if running and 'close' not in str(e).lower():
-                        print(f"Client->PVE error: {e}")
+                        logging.debug(f"[VNC] Client->PVE: {e}")
+                finally:
                     running = False
-            
-            # Run both directions concurrently
+                    stop_evt.set()
+
+            async def pve_keepalive():
+                """Ping Proxmox every 15s so pvedaemon doesn't close an idle session (#312).
+                Uses wait_for on stop_evt so we bail out instantly when the session ends."""
+                while running:
+                    try:
+                        await asyncio.wait_for(stop_evt.wait(), timeout=15)
+                        break  # stop_evt was set — session ending
+                    except asyncio.TimeoutError:
+                        pass
+                    if not running:
+                        break
+                    try:
+                        await asyncio.to_thread(pve_ws.ping)
+                    except Exception:
+                        break
+
             task1 = asyncio.create_task(proxmox_to_client())
             task2 = asyncio.create_task(client_to_proxmox())
-            
+            task3 = asyncio.create_task(pve_keepalive())
+
             done, pending = await asyncio.wait(
-                [task1, task2],
+                [task1, task2, task3],
                 return_when=asyncio.FIRST_COMPLETED
             )
             
@@ -5866,7 +5933,7 @@ def start_vnc_websocket_server(port=5001, ssl_cert=None, ssl_key=None, host='0.0
                 except asyncio.CancelledError:
                     pass
             
-            print(f"Session ended: sent {bytes_sent}, received {bytes_received}")
+            logging.debug(f"[VNC] session ended: sent {bytes_sent}B, received {bytes_received}B")
             
         except Exception as e:
             logging.exception(f"VNC WS handler error: {type(e).__name__}: {e}")

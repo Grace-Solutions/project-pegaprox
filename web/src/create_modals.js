@@ -493,41 +493,41 @@
                                             {osTypes.map(os => <option key={os.value} value={os.value}>{os.label}</option>)}
                                         </select>
                                     </div>
-                                    <div className="relative">
+                                    <div>
                                         <label className="block text-sm text-gray-400 mb-1">{t('isoImage')}</label>
-                                        <input
-                                            type="text"
-                                            value={config._isoSearch !== undefined ? config._isoSearch : (config.iso ? config.iso.split('/').pop() : '')}
-                                            onChange={e => setConfig({...config, _isoSearch: e.target.value, _isoOpen: true})}
-                                            onFocus={() => setConfig(prev => ({...prev, _isoOpen: true, _isoSearch: prev._isoSearch !== undefined ? prev._isoSearch : ''}))}
-                                            placeholder={t('noIso') || 'No ISO'}
-                                            className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white"
-                                        />
-                                        {config.iso && !config._isoOpen && (
-                                            <button onClick={() => setConfig({...config, iso: '', _isoSearch: '', _isoOpen: false})}
-                                                className="absolute right-2 top-8 text-gray-500 hover:text-white">
-                                                <Icons.X className="w-4 h-4" />
-                                            </button>
+                                        {/* NS Apr 2026 (#305): filter input above native select — scrollable + selectable */}
+                                        {isoList.length > 5 && (
+                                            <div className="relative mb-1">
+                                                <Icons.Search className="w-3 h-3 absolute left-2 top-2.5 text-gray-500" />
+                                                <input
+                                                    type="text"
+                                                    value={config._isoFilter || ''}
+                                                    onChange={e => setConfig({...config, _isoFilter: e.target.value})}
+                                                    placeholder={t('filterIso') || 'Filter ISOs…'}
+                                                    className="w-full pl-7 pr-2 py-1.5 bg-proxmox-dark border border-proxmox-border rounded text-white text-xs focus:outline-none focus:border-proxmox-orange"
+                                                />
+                                            </div>
                                         )}
-                                        {config._isoOpen && (() => {
-                                            const q = (config._isoSearch || '').toLowerCase();
-                                            const filtered = isoList.filter(iso => !q || iso.volid.toLowerCase().includes(q));
+                                        {(() => {
+                                            const q = (config._isoFilter || '').toLowerCase();
+                                            const filtered = q ? isoList.filter(iso => iso.volid.toLowerCase().includes(q)) : isoList;
                                             return (
-                                                <>
-                                                    <div className="fixed inset-0 z-10" onClick={() => setConfig(prev => ({...prev, _isoOpen: false, _isoSearch: undefined}))} />
-                                                    <div className="absolute z-20 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-proxmox-card border border-proxmox-border rounded-lg shadow-xl">
-                                                        <div onClick={() => setConfig(prev => ({...prev, iso: '', _isoOpen: false, _isoSearch: undefined}))}
-                                                            className="px-3 py-2 text-sm text-gray-400 hover:bg-proxmox-hover cursor-pointer">{t('noIso')}</div>
-                                                        {filtered.length === 0 && <div className="px-3 py-2 text-sm text-gray-500">{t('noResults') || 'No results'}</div>}
-                                                        {filtered.map(iso => (
-                                                            <div key={iso.volid}
-                                                                onClick={() => setConfig(prev => ({...prev, iso: iso.volid, _isoOpen: false, _isoSearch: undefined}))}
-                                                                className="px-3 py-2 text-sm text-white hover:bg-proxmox-hover cursor-pointer truncate">
-                                                                {iso.volid.split('/').pop()}
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </>
+                                                <select
+                                                    value={config.iso}
+                                                    onChange={e => setConfig({...config, iso: e.target.value})}
+                                                    className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white"
+                                                >
+                                                    <option value="">{t('noIso')}</option>
+                                                    {isoList.length === 0 && <option disabled>{t('noIsoAvailable')}</option>}
+                                                    {/* show currently selected even if it doesn't match filter — prevents blank */}
+                                                    {config.iso && q && !filtered.find(i => i.volid === config.iso) && (
+                                                        <option value={config.iso}>{config.iso.split('/').pop()} ✓</option>
+                                                    )}
+                                                    {filtered.map(iso => (
+                                                        <option key={iso.volid} value={iso.volid}>{iso.volid.split('/').pop()}</option>
+                                                    ))}
+                                                    {q && filtered.length === 0 && <option disabled>{t('noResults') || 'No results'}</option>}
+                                                </select>
                                             );
                                         })()}
                                         {isoStorages.length === 0 && (
@@ -1783,7 +1783,9 @@
                 name: '', host: '', port: 8007, user: 'root@pam', password: '',
                 api_token_id: '', api_token_secret: '', fingerprint: '',
                 ssl_verify: false, linked_clusters: [], notes: '',
+                ssh_user: '', ssh_port: 22, ssh_key: '',
             });
+            const [showPbsSshSettings, setShowPbsSshSettings] = useState(false);
 
             // VMware config
             const [vmwConfig, setVmwConfig] = useState({
@@ -2019,6 +2021,41 @@
                                 <input type="text" value={pbsConfig.notes} onChange={e => setPbsConfig({...pbsConfig, notes: e.target.value})}
                                     className="w-full px-4 py-2.5 bg-proxmox-dark border border-proxmox-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 transition-colors"
                                     placeholder="Backup for production cluster" />
+                            </div>
+
+                            {/* NS Apr 2026: SSH settings — needed for running apt upgrade on the PBS host */}
+                            <div className="pt-4 border-t border-proxmox-border">
+                                <button type="button" onClick={() => setShowPbsSshSettings(!showPbsSshSettings)}
+                                    className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors">
+                                    <Icons.ChevronRight className={`w-3 h-3 transform transition-transform ${showPbsSshSettings ? 'rotate-90' : ''}`} />
+                                    {t('sshKeyOptional') || 'SSH (Optional — needed for remote update)'}
+                                </button>
+                                {showPbsSshSettings && (
+                                    <div className="mt-4 space-y-3 p-4 bg-proxmox-dark/50 rounded-lg">
+                                        <p className="text-xs text-gray-400">
+                                            {t('pbsSshHint') || 'SSH is only used for the Update Manager (apt dist-upgrade). If left blank, PegaProx falls back to the PBS web password. Use a dedicated key if your PBS has password-login disabled.'}
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">{t('sshUser') || 'SSH User'}</label>
+                                                <input type="text" value={pbsConfig.ssh_user} onChange={e => setPbsConfig({...pbsConfig, ssh_user: e.target.value})}
+                                                    placeholder="root"
+                                                    className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white text-sm" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">{t('sshPort') || 'SSH Port'}</label>
+                                                <input type="number" value={pbsConfig.ssh_port} onChange={e => setPbsConfig({...pbsConfig, ssh_port: parseInt(e.target.value) || 22})}
+                                                    className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white text-sm" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">{t('sshPrivateKey') || 'SSH Private Key'}</label>
+                                            <textarea value={pbsConfig.ssh_key} onChange={e => setPbsConfig({...pbsConfig, ssh_key: e.target.value})}
+                                                className="w-full px-3 py-2 bg-proxmox-dark border border-proxmox-border rounded-lg text-white placeholder-gray-500 font-mono text-xs"
+                                                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" rows={4} />
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                             </>)}
 
